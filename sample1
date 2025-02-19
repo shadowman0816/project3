@@ -1,13 +1,19 @@
 package net.jpmchase.payroll.processor.aspect;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.jpmchase.payroll.processor.model.EventLogEntity;
-import net.jpmchase.payroll.processor.repository.EventLogRepository;
-import net.jpmchase.payroll.processor.service.SQSPublisherService;
+import net.jpmchase.payroll.processor.model.PyrlEventLog;
+import net.jpmchase.payroll.processor.repository.PyrlEventLogRepository;
+import net.jpmchase.payroll.processor.model.Event;
 import org.aspectj.lang.JoinPoint;
-import org.aspectj.lang.annotation.*;
+import org.aspectj.lang.annotation.Around;
+import org.aspectj.lang.annotation.Aspect;
+import org.aspectj.lang.annotation.Before;
+import org.aspectj.lang.ProceedingJoinPoint;
 import org.springframework.stereotype.Component;
+
 import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,76 +24,439 @@ import java.util.UUID;
 @Slf4j
 public class EventLogAspect {
 
-    private final EventLogRepository eventLogRepository;
-    private final SQSPublisherService sqsPublisherService;
+    private final PyrlEventLogRepository eventLogRepository;
+    private final ObjectMapper objectMapper;
 
-    private static final String SYSTEM_USER = "SYSTEM";
-    private static final String SQS_RETRY_QUEUE = "retry-queue";
-
-    @Pointcut("execution(* net.jpmchase.payroll.processor.service.*.*(..))")
-    public void serviceMethods() {}
-
-    @Before("serviceMethods() && args(eventId, ..)")
-    public void logEventProcessingStart(JoinPoint joinPoint, UUID eventId) {
-        updateEventLog(eventId, "CONSUMED_BY_PROCESSOR", null);
-        logEvent("INFO", eventId, "Processing started.");
+    @Before("@annotation(LogEvent)")
+    public void trackStepStart(JoinPoint joinPoint) {
+        String stepName = joinPoint.getSignature().getName();
+        log.info("[EVENT-LOG] Step '{}' started processing.", stepName);
     }
 
-    @AfterReturning("execution(* net.jpmchase.payroll.processor.validation.*.*(..)) && args(eventId, ..)")
-    public void logValidationCompleted(UUID eventId) {
-        updateEventLog(eventId, "VALIDATION_COMPLETED", null);
-        logEvent("INFO", eventId, "Validation completed.");
-    }
+    @Around("@annotation(LogEvent)")
+    public Object trackStepExecution(ProceedingJoinPoint joinPoint) throws Throwable {
+        String stepName = joinPoint.getSignature().getName();
+        Object[] args = joinPoint.getArgs();
+        Event event = (Event) args[0];
 
-    @Before("execution(* net.jpmchase.payroll.processor.processor.*.*(..)) && args(eventId, ..)")
-    public void logProcessingStart(UUID eventId) {
-        updateEventLog(eventId, "PROCESSING_STARTED", null);
-        logEvent("INFO", eventId, "Business processing started.");
-    }
+        log.info("[EVENT-LOG] Tracking execution of step '{}' for event '{}'", stepName, event.getEventType());
 
-    @AfterReturning("execution(* net.jpmchase.payroll.processor.processor.*.*(..)) && args(eventId, ..)")
-    public void logProcessingCompleted(UUID eventId) {
-        updateEventLog(eventId, "PROCESSING_COMPLETED", null);
-        logEvent("INFO", eventId, "Business processing completed.");
-    }
+        // Update event log for step start
+        updateEventLog(event, stepName, "IN_PROGRESS", null, 0);
 
-    @AfterReturning("serviceMethods() && args(eventId, ..)")
-    public void logEventSuccess(UUID eventId) {
-        updateEventLog(eventId, "SUCCESS", null);
-        logEvent("INFO", eventId, "Processing successful.");
-    }
+        try {
+            Object result = joinPoint.proceed();
+            
+            // Step execution successful, update event log
+            updateEventLog(event, stepName, "SUCCESS", null, 0);
+            return result;
+        } catch (Exception e) {
+            log.error("[EVENT-LOG] Step '{}' failed for event '{}': {}", stepName, event.getEventType(), e.getMessage());
 
-    @AfterThrowing(value = "serviceMethods() && args(eventId, ..)", throwing = "exception")
-    public void logProcessingFailure(UUID eventId, Exception exception) {
-        updateEventLog(eventId, "FAILED", exception.getMessage());
-        logEvent("ERROR", eventId, "Processing failed: " + exception.getMessage());
+            // Fetch previous retry count and increment
+            Optional<PyrlEventLog> existingLog = eventLogRepository.findBySrcEvntId(event.getUuid().toString());
+            int retryCount = existingLog.map(PyrlEventLog::getRetryCount).orElse(0) + 1;
 
-        // Publish to Retry Queue
-        sqsPublisherService.publishMessage(SQS_RETRY_QUEUE, eventId.toString());
-        logEvent("INFO", eventId, "Message sent to retry queue.");
-    }
+            // Step execution failed, update event log
+            updateEventLog(event, stepName, "FAILED", e.getMessage(), retryCount);
 
-    private void updateEventLog(UUID eventId, String status, String failureReason) {
-        Optional<EventLogEntity> existingLog = eventLogRepository.findByEventId(eventId);
-        if (existingLog.isPresent()) {
-            EventLogEntity eventLog = existingLog.get();
-            eventLog.setStatus(status);
-            eventLog.setFailureReason(failureReason);
-            eventLog.setUpdatedTimestamp(LocalDateTime.now());
-            eventLog.setUpdatedBy(SYSTEM_USER);
-            eventLogRepository.save(eventLog);
-        } else {
-            log.warn("[EVENT-LOG] Event Log not found for event {}", eventId);
+            throw e; // Let retry mechanism handle failure
         }
     }
 
-    private void logEvent(String level, UUID eventId, String message) {
-        log.info("{{\"level\":\"{}\",\"eventId\":\"{}\",\"timestamp\":\"{}\",\"message\":\"{}\"}}", 
-                 level, eventId, LocalDateTime.now(), message);
+    private void updateEventLog(Event event, String step, String status, String failureReason, int retryCount) {
+        Optional<PyrlEventLog> existingLog = eventLogRepository.findBySrcEvntId(event.getUuid().toString());
+        PyrlEventLog eventLog = existingLog.orElseGet(() -> PyrlEventLog.builder()
+                .pyrlEvntLogId(UUID.randomUUID())
+                .srcEvntId(event.getUuid().toString())
+                .srcEvntType(event.getEventType())
+                .srcEvntTs(LocalDateTime.now())
+                .creTs(LocalDateTime.now())
+                .creUsrId("SYSTEM")
+                .build());
+
+        eventLog.setSrcEvntSts(status);
+        eventLog.setRetryCount(retryCount);
+        eventLog.setUpdtTs(LocalDateTime.now());
+        eventLog.setUpdtUsrId("SYSTEM");
+        eventLog.setStatus(status);
+        eventLog.setStatusRsn(failureReason);
+
+        eventLogRepository.save(eventLog);
+        log.info("[EVENT-LOG] Updated EventLog: Event '{}', Step '{}', Status '{}', Retry '{}'", 
+                event.getEventType(), step, status, retryCount);
     }
 }
+
 
 {"level":"INFO","eventId":"f2f8dcd3-5d0f-4e47-a2f1-5bda6c6b1931","timestamp":"2025-02-19T14:45:23","message":"Processing started."}
 {"level":"INFO","eventId":"f2f8dcd3-5d0f-4e47-a2f1-5bda6c6b1931","timestamp":"2025-02-19T14:45:30","message":"Validation completed."}
 {"level":"ERROR","eventId":"f2f8dcd3-5d0f-4e47-a2f1-5bda6c6b1931","timestamp":"2025-02-19T14:46:00","message":"Processing failed: TimeoutException"}
 {"level":"INFO","eventId":"f2f8dcd3-5d0f-4e47-a2f1-5bda6c6b1931","timestamp":"2025-02-19T14:46:02","message":"Message sent to retry queue."}
+
+workFlow:
+  payroll.processed:
+    steps:
+      - name: fetchPayrollDetails
+        condition: always
+      - name: determineRouting
+        condition: always
+      - name: processSafePay
+        condition: "event.routing == 'SAFE_PAY'"
+        nextStepTrigger: "SAFE_PAY_CONFIRMED"
+      - name: processACH
+        condition: "event.routing == 'SAFE_PAY'"
+      - name: scheduleEvent
+        condition: "event.routing == 'EVENT_BRIDGE'"
+      - name: ignoreEvent
+        condition: "event.routing == 'IGNORE'"
+        retryCount: 0
+  bank_account.created:
+    steps:
+      - name: validateBankAccount
+        condition: always
+      - name: linkToCompany
+        condition: "event.isCompanyLinked == false"
+      - name: notifyUser
+        condition: always
+        retryCount: 1 # Overrides global retry setting
+
+   employee.terminated:
+    steps:
+      - name: validateEmployee
+        condition: always
+      - name: updateHRSystem
+        condition: "event.hasFinalPayout == true"
+      - name: sendTerminationEmail
+        condition: always
+
+retry:
+  maxRetries: 3
+  exponentialBackoff:
+    initialDelaySeconds: 900
+    maxDelaySeconds: 14400
+    multiplier: 2
+
+sqs:
+  retryQueueUrl: "https://sqs.amazonaws.com/your-retry-queue-url"
+  dlqUrl: "https://sqs.amazonaws.com/your-dlq-url"
+
+cibGustoClient:
+  baseUrl: "https://cib-proxy.example.com"
+  endpoints:
+    payroll: "/payroll/{payrollUUID}"
+    bankAccount: "/bank_account/{bankAccountUUID}"
+    employee: "/employee/{employeeUUID}"
+
+eventBridge:
+  arn: "arn:aws:events:us-east-1:123456789012:event-bus/default"
+
+
+  
+package net.jpmchase.payroll.processor.client;
+
+import net.jpmchase.payroll.processor.dto.PayrollResponse;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+
+@FeignClient(name = "CIBGustoClient", url = "${cibGustoClient.baseUrl}")
+public interface CIBGustoFeignClient {
+
+    @GetMapping("${cibGustoClient.endpoints.payroll}")
+    PayrollResponse getPayrollDetails(@PathVariable("payrollUUID") String payrollUUID);
+}
+
+package net.jpmchase.payroll.processor.steps.payroll;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.client.CIBGustoFeignClient;
+import net.jpmchase.payroll.processor.dto.PayrollResponse;
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.steps.Step;
+import org.springframework.stereotype.Component;
+
+@Component("fetchPayrollDetails")
+@RequiredArgsConstructor
+@Slf4j
+public class FetchPayrollDetailsStep implements Step {
+
+    private final CIBGustoFeignClient cibGustoFeignClient;
+
+    @Override
+    public void execute(Event event) {
+        String payrollUUID = event.getMessageBody().getEventPayload().getReferences().get("payrollUUID").toString();
+        
+        log.info("Fetching payroll details from CIB-Gusto for payroll UUID: {}", payrollUUID);
+        PayrollResponse payrollResponse = cibGustoFeignClient.getPayrollDetails(payrollUUID);
+
+        // Extract payroll date from response
+        String payrollDate = payrollResponse.getPayrollDate();
+        event.getMessageBody().getEventPayload().getReferences().put("payrollDate", payrollDate);
+        
+        log.info("Payroll date retrieved: {} for event {}", payrollDate, event.getEventType());
+    }
+}
+
+package net.jpmchase.payroll.processor.dto;
+
+import lombok.Data;
+
+@Data
+public class PayrollResponse {
+    private String payrollUUID;
+    private String payrollDate;
+}
+
+package net.jpmchase.payroll.processor.steps.payroll;
+
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.steps.Step;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+
+@Component("determineRouting")
+@Slf4j
+public class DetermineRoutingStep implements Step {
+
+    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+
+    @Override
+    public void execute(Event event) {
+        String payrollDateStr = event.getMessageBody().getEventPayload().getReferences().get("payrollDate").toString();
+        LocalDate payrollDate = LocalDate.parse(payrollDateStr, DATE_FORMAT);
+        LocalDate today = LocalDate.now();
+
+        if (payrollDate.equals(today)) {
+            event.getMessageBody().getEventPayload().getReferences().put("routing", "SAFE_PAY");
+            log.info("Payroll event is for today, routing to SafePay.");
+        } else if (payrollDate.isAfter(today)) {
+            event.getMessageBody().getEventPayload().getReferences().put("routing", "EVENT_BRIDGE");
+            log.info("Future-dated payroll event, scheduling via EventBridge.");
+        } else {
+            event.getMessageBody().getEventPayload().getReferences().put("routing", "IGNORE");
+            log.warn("Backdated payroll event detected, ignoring.");
+        }
+    }
+}
+
+package net.jpmchase.payroll.processor.steps.payroll;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.client.EventBridgeClient;
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.steps.Step;
+import org.springframework.stereotype.Component;
+
+@Component("scheduleEvent")
+@RequiredArgsConstructor
+@Slf4j
+public class ScheduleEventBridgeStep implements Step {
+
+    private final EventBridgeClient eventBridgeClient;
+
+    @Override
+    public void execute(Event event) {
+        log.info("Scheduling Payroll event via EventBridge: {}", event.getEventType());
+        eventBridgeClient.scheduleEvent(event);
+    }
+}
+
+package net.jpmchase.payroll.processor.steps.payroll;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.steps.Step;
+
+import org.springframework.stereotype.Component;
+
+@Component("processSafePay")
+@RequiredArgsConstructor
+@Slf4j
+public class ProcessSafePayStep implements Step {
+
+    private final KafkaTemplate<String, String> kafkaTemplate;
+
+    @Override
+    public void execute(Event event) {
+        log.info("Publishing Payroll to SafePay Kafka Topic for event '{}'", event.getEventType());
+        
+        String message = objectMapper.writeValueAsString(event);
+        
+
+        log.info("SafePay Event Published with UUID: {}", event.getUuid());
+    }
+}
+
+package net.jpmchase.payroll.processor.processor;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.registry.WorkFlowRegistry;
+import net.jpmchase.payroll.processor.steps.Step;
+import org.springframework.stereotype.Service;
+import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class EventProcessorService {
+
+    private final WorkFlowRegistry workFlowRegistry;
+    private final Map<String, Step> stepRegistry;
+    private final SqsClient sqsClient;
+    private final String retryQueueUrl = "https://sqs.amazonaws.com/your-retry-queue-url";
+
+    public void processEvent(Event event) {
+        List<StepConfig> steps = workFlowRegistry.getStepsForEvent(event.getEventType());
+
+        if (steps.isEmpty()) {
+            log.warn("No workflow found for event '{}'. Skipping processing.", event.getEventType());
+            return;
+        }
+
+        log.info("Processing event '{}' with workflow steps: {}", event.getEventType(), steps);
+        for (StepConfig stepConfig : steps) {
+            executeStepWithRetry(stepConfig, event, 0);
+        }
+    }
+
+    public void processFromStep(Event event, String failedStep, int retryCount) {
+        List<StepConfig> steps = workFlowRegistry.getStepsForEvent(event.getEventType());
+        int startIndex = findStepIndex(steps, failedStep);
+
+        if (startIndex == -1) {
+            log.error("Step '{}' not found in workflow for event '{}'. Skipping processing.", failedStep, event.getEventType());
+            return;
+        }
+
+        log.info("Resuming event '{}' from step '{}' (Retry Count: {})", event.getEventType(), failedStep, retryCount);
+
+        for (int i = startIndex; i < steps.size(); i++) {
+            executeStepWithRetry(steps.get(i), event, retryCount);
+        }
+    }
+
+    private void executeStepWithRetry(StepConfig stepConfig, Event event, int retryCount) {
+        Step stepExecutor = stepRegistry.get(stepConfig.getName());
+        if (stepExecutor == null) {
+            log.warn("Step '{}' not found for event '{}'", stepConfig.getName(), event.getEventType());
+            return;
+        }
+
+        while (retryCount < workFlowRegistry.getRetryCountForStep(event.getEventType(), stepConfig.getName())) {
+            try {
+                log.info("Executing step '{}' (Attempt {}/{})", stepConfig.getName(), retryCount + 1, workFlowRegistry.getRetryCountForStep(event.getEventType(), stepConfig.getName()));
+                stepExecutor.execute(event);
+                return;
+            } catch (Exception e) {
+                retryCount++;
+                int delay = workFlowRegistry.getBackoffDelay(event.getEventType(), stepConfig.getName(), retryCount);
+                log.error("Step '{}' failed (Retry {}/{}). Retrying in {} seconds.", stepConfig.getName(), retryCount, workFlowRegistry.getRetryCountForStep(event.getEventType(), stepConfig.getName()), delay);
+                sendToRetryQueue(event, stepConfig.getName(), retryCount, delay);
+            }
+        }
+    }
+
+    private int findStepIndex(List<StepConfig> steps, String failedStep) {
+        for (int i = 0; i < steps.size(); i++) {
+            if (steps.get(i).getName().equals(failedStep)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void sendToRetryQueue(Event event, String step, int retryCount, int delay) {
+        sqsClient.sendMessage(SendMessageRequest.builder()
+                .queueUrl(retryQueueUrl)
+                .messageBody("{\"event\": \"" + event.getEventType() + "\", \"step\": \"" + step + "\", \"retryCount\": " + retryCount + "}")
+                .delaySeconds(delay)
+                .build());
+    }
+}
+
+package net.jpmchase.payroll.processor.registry;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.config.RetryConfig;
+import net.jpmchase.payroll.processor.config.WorkFlowConfig;
+import net.jpmchase.payroll.processor.config.StepConfig;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class WorkFlowRegistry {
+
+    private final WorkFlowConfig workFlowConfig;
+    private final RetryConfig retryConfig;
+
+    public List<StepConfig> getStepsForEvent(String eventType) {
+        return workFlowConfig.getSteps().getOrDefault(eventType, List.of());
+    }
+
+    public StepConfig getStepConfig(String eventType, String step) {
+        return getStepsForEvent(eventType).stream()
+                .filter(s -> s.getName().equals(step))
+                .findFirst()
+                .orElse(null);
+    }
+
+    public int getRetryCountForStep(String eventType, String step) {
+        StepConfig stepConfig = getStepConfig(eventType, step);
+        return stepConfig != null && stepConfig.getRetryCount() != null ? stepConfig.getRetryCount() : retryConfig.getMaxRetries();
+    }
+
+    public int getBackoffDelay(String eventType, String step, int retryCount) {
+        StepConfig stepConfig = getStepConfig(eventType, step);
+        int initialDelay = stepConfig != null && stepConfig.getBackoff() != null ?
+                stepConfig.getBackoff().getInitialDelaySeconds() : retryConfig.getInitialDelaySeconds();
+        int maxDelay = stepConfig != null && stepConfig.getBackoff() != null ?
+                stepConfig.getBackoff().getMaxDelaySeconds() : retryConfig.getMaxDelaySeconds();
+        int multiplier = stepConfig != null && stepConfig.getBackoff() != null ?
+                stepConfig.getBackoff().getMultiplier() : retryConfig.getMultiplier();
+
+        int delay = (int) (initialDelay * Math.pow(multiplier, retryCount - 1));
+        return Math.min(delay, maxDelay);
+    }
+}
+
+package net.jpmchase.payroll.processor.config;
+
+import lombok.Getter;
+import lombok.Setter;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.Map;
+
+@Getter
+@Setter
+@Configuration
+@ConfigurationProperties(prefix = "retry")
+public class RetryConfig {
+    private int maxRetries;
+    private int initialDelaySeconds;
+    private int maxDelaySeconds;
+    private int multiplier;
+}
+
+
+
