@@ -1,0 +1,93 @@
+package net.jpmchase.payroll.processor.aspect;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.model.EventLogEntity;
+import net.jpmchase.payroll.processor.repository.EventLogRepository;
+import net.jpmchase.payroll.processor.service.SQSPublisherService;
+import org.aspectj.lang.JoinPoint;
+import org.aspectj.lang.annotation.*;
+import org.springframework.stereotype.Component;
+import java.time.LocalDateTime;
+import java.util.Optional;
+import java.util.UUID;
+
+@Aspect
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class EventLogAspect {
+
+    private final EventLogRepository eventLogRepository;
+    private final SQSPublisherService sqsPublisherService;
+
+    private static final String SYSTEM_USER = "SYSTEM";
+    private static final String SQS_RETRY_QUEUE = "retry-queue";
+
+    @Pointcut("execution(* net.jpmchase.payroll.processor.service.*.*(..))")
+    public void serviceMethods() {}
+
+    @Before("serviceMethods() && args(eventId, ..)")
+    public void logEventProcessingStart(JoinPoint joinPoint, UUID eventId) {
+        updateEventLog(eventId, "CONSUMED_BY_PROCESSOR", null);
+        logEvent("INFO", eventId, "Processing started.");
+    }
+
+    @AfterReturning("execution(* net.jpmchase.payroll.processor.validation.*.*(..)) && args(eventId, ..)")
+    public void logValidationCompleted(UUID eventId) {
+        updateEventLog(eventId, "VALIDATION_COMPLETED", null);
+        logEvent("INFO", eventId, "Validation completed.");
+    }
+
+    @Before("execution(* net.jpmchase.payroll.processor.processor.*.*(..)) && args(eventId, ..)")
+    public void logProcessingStart(UUID eventId) {
+        updateEventLog(eventId, "PROCESSING_STARTED", null);
+        logEvent("INFO", eventId, "Business processing started.");
+    }
+
+    @AfterReturning("execution(* net.jpmchase.payroll.processor.processor.*.*(..)) && args(eventId, ..)")
+    public void logProcessingCompleted(UUID eventId) {
+        updateEventLog(eventId, "PROCESSING_COMPLETED", null);
+        logEvent("INFO", eventId, "Business processing completed.");
+    }
+
+    @AfterReturning("serviceMethods() && args(eventId, ..)")
+    public void logEventSuccess(UUID eventId) {
+        updateEventLog(eventId, "SUCCESS", null);
+        logEvent("INFO", eventId, "Processing successful.");
+    }
+
+    @AfterThrowing(value = "serviceMethods() && args(eventId, ..)", throwing = "exception")
+    public void logProcessingFailure(UUID eventId, Exception exception) {
+        updateEventLog(eventId, "FAILED", exception.getMessage());
+        logEvent("ERROR", eventId, "Processing failed: " + exception.getMessage());
+
+        // Publish to Retry Queue
+        sqsPublisherService.publishMessage(SQS_RETRY_QUEUE, eventId.toString());
+        logEvent("INFO", eventId, "Message sent to retry queue.");
+    }
+
+    private void updateEventLog(UUID eventId, String status, String failureReason) {
+        Optional<EventLogEntity> existingLog = eventLogRepository.findByEventId(eventId);
+        if (existingLog.isPresent()) {
+            EventLogEntity eventLog = existingLog.get();
+            eventLog.setStatus(status);
+            eventLog.setFailureReason(failureReason);
+            eventLog.setUpdatedTimestamp(LocalDateTime.now());
+            eventLog.setUpdatedBy(SYSTEM_USER);
+            eventLogRepository.save(eventLog);
+        } else {
+            log.warn("[EVENT-LOG] Event Log not found for event {}", eventId);
+        }
+    }
+
+    private void logEvent(String level, UUID eventId, String message) {
+        log.info("{{\"level\":\"{}\",\"eventId\":\"{}\",\"timestamp\":\"{}\",\"message\":\"{}\"}}", 
+                 level, eventId, LocalDateTime.now(), message);
+    }
+}
+
+{"level":"INFO","eventId":"f2f8dcd3-5d0f-4e47-a2f1-5bda6c6b1931","timestamp":"2025-02-19T14:45:23","message":"Processing started."}
+{"level":"INFO","eventId":"f2f8dcd3-5d0f-4e47-a2f1-5bda6c6b1931","timestamp":"2025-02-19T14:45:30","message":"Validation completed."}
+{"level":"ERROR","eventId":"f2f8dcd3-5d0f-4e47-a2f1-5bda6c6b1931","timestamp":"2025-02-19T14:46:00","message":"Processing failed: TimeoutException"}
+{"level":"INFO","eventId":"f2f8dcd3-5d0f-4e47-a2f1-5bda6c6b1931","timestamp":"2025-02-19T14:46:02","message":"Message sent to retry queue."}
