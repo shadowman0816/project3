@@ -349,25 +349,69 @@ public class EventProcessorService {
         }
     }
 
-    private void executeStepWithRetry(StepConfig stepConfig, Event event, int retryCount) {
-        Step stepExecutor = stepRegistry.get(stepConfig.getName());
-        if (stepExecutor == null) {
-            log.warn("Step '{}' not found for event '{}'", stepConfig.getName(), event.getEventType());
+    private void executeStepWithRetry(StepConfig.StepSettings stepConfig, Event event, int retryCount) {
+        if (!evaluateCondition(stepConfig.getCondition(), event)) {
+            log.info("[PROCESSOR] Skipping step '{}' due to condition '{}'", stepConfig.getName(), stepConfig.getCondition());
             return;
         }
 
-        while (retryCount < workFlowRegistry.getRetryCountForStep(event.getEventType(), stepConfig.getName())) {
+        Step stepExecutor = stepRegistry.get(stepConfig.getName());
+        if (stepExecutor == null) {
+            log.warn("[PROCESSOR] Step '{}' not found for event '{}'", stepConfig.getName(), event.getEventType());
+            return;
+        }
+
+        // **Check if retry is disabled for this step**
+        if (stepConfig.isDisableRetry()) {
             try {
-                log.info("Executing step '{}' (Attempt {}/{})", stepConfig.getName(), retryCount + 1, workFlowRegistry.getRetryCountForStep(event.getEventType(), stepConfig.getName()));
                 stepExecutor.execute(event);
+                log.info("[PROCESSOR] Step '{}' executed successfully (No Retry Allowed)", stepConfig.getName());
+            } catch (Exception e) {
+                log.error("[PROCESSOR] Step '{}' failed. No retries allowed. Error: {}", stepConfig.getName(), e.getMessage());
+            }
+            return;
+        }
+
+        // **Apply Exponential Backoff & Retry Logic**
+        int maxRetries = stepConfig.getRetryCount() == -1 ? this.stepConfig.getMaxRetries() : stepConfig.getRetryCount();
+        long initialDelay = stepConfig.getExponentialBackoff().getInitialDelaySeconds();
+        double multiplier = stepConfig.getExponentialBackoff().getMultiplier();
+        long maxDelay = stepConfig.getExponentialBackoff().getMaxDelaySeconds();
+
+        while (retryCount < maxRetries) {
+            try {
+                stepExecutor.execute(event);
+                log.info("[PROCESSOR] Step '{}' executed successfully", stepConfig.getName());
                 return;
             } catch (Exception e) {
                 retryCount++;
-                int delay = workFlowRegistry.getBackoffDelay(event.getEventType(), stepConfig.getName(), retryCount);
-                log.error("Step '{}' failed (Retry {}/{}). Retrying in {} seconds.", stepConfig.getName(), retryCount, workFlowRegistry.getRetryCountForStep(event.getEventType(), stepConfig.getName()), delay);
-                sendToRetryQueue(event, stepConfig.getName(), retryCount, delay);
+                log.warn("[PROCESSOR] Step '{}' failed for event '{}'. Attempt {}/{}. Sending to retry queue.",
+                        stepConfig.getName(), event.getEventType(), retryCount, maxRetries);
+
+                // Calculate exponential backoff delay
+                long delay = Math.min((long) (initialDelay * Math.pow(multiplier, retryCount - 1)), maxDelay);
+
+                // Send failed step to retry queue with calculated delay
+                sendToRetryQueue(event, stepConfig.getName(), retryCount, (int) delay);
+                return; // Stop execution, let the retry queue handle re-execution
             }
         }
+
+        log.error("[PROCESSOR] Step '{}' permanently failed for Event '{}'. Max retries reached.", stepConfig.getName(), event.getUuid());
+    }
+
+    private void sendToRetryQueue(Event event, String step, int retryCount, int delay) {
+        sqsClient.sendMessage(SendMessageRequest.builder()
+                .queueUrl(retryQueueUrl)
+                .messageBody(String.format("{\"event\":\"%s\", \"step\":\"%s\", \"retryCount\":%d}", event.getEventType(), step, retryCount))
+                .delaySeconds(delay)
+                .build());
+
+        log.info("[PROCESSOR] Sent event '{}' step '{}' to retry queue with {} seconds delay.", event.getEventType(), step, delay);
+    }
+
+    private boolean evaluateCondition(String condition, Event event) {
+        return "always".equalsIgnoreCase(condition) || condition.contains(event.getRouting());
     }
 
     private int findStepIndex(List<StepConfig> steps, String failedStep) {
