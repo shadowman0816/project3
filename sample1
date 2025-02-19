@@ -458,5 +458,52 @@ public class RetryConfig {
     private int multiplier;
 }
 
+package net.jpmchase.payroll.processor.listeners;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.converters.MessageConverter;
+import net.jpmchase.payroll.processor.model.MessageBody;
+import net.jpmchase.payroll.processor.service.EventProcessorService;
+import net.jpmchase.payroll.processor.service.MessageProcessorRegistry;
+import org.springframework.cloud.aws.messaging.listener.annotation.SqsListener;
+import org.springframework.stereotype.Component;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class SqsEventListener {
+
+    private final MessageConverter<MessageBody> messageConverter;
+    private final MessageProcessorRegistry processorRegistry;
+
+    @SqsListener(value = "${aws.sqs.priority.queue.url}", deletionPolicy = SqsMessageDeletionPolicy.ON_SUCCESS)
+    public void processPriorityQueueMessage(String message) {
+        processMessage(message, "PRIORITY_QUEUE");
+    }
+
+    @SqsListener(value = "${aws.sqs.nonpriority.queue.url}", deletionPolicy = SqsMessageDeletionPolicy.ON_SUCCESS)
+    public void processNonPriorityQueueMessage(String message) {
+        processMessage(message, "NON_PRIORITY_QUEUE");
+    }
+
+    private void processMessage(String message, String queueType) {
+        try {
+            MessageBody messageBody = messageConverter.convert(message);
+            EventProcessorService processor = processorRegistry.getProcessorForEvent(messageBody.getEventPayload().getEventType());
+
+            if (processor == null) {
+                log.error("[SQS_PROCESSOR] No processor found for event type: {}", messageBody.getEventPayload().getEventType());
+                return;
+            }
+
+            processor.processEvent(messageBody);
+            log.info("[SQS_PROCESSOR] Successfully processed event: {} from queue: {}", messageBody.getEventPayload().getEventType(), queueType);
+
+        } catch (Exception e) {
+            log.error("[SQS_PROCESSOR] Error processing message from queue: {} | Error: {}", queueType, e.getMessage(), e);
+        }
+    }
+}
 
 
