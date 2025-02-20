@@ -1,0 +1,223 @@
+package net.jpmchase.payroll.processor.service;
+
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.registry.WorkFlowRegistry;
+import net.jpmchase.payroll.processor.steps.Step;
+import net.jpmchase.payroll.processor.steps.StepConfig;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class EventProcessorServiceTest {
+
+    @Mock
+    private WorkFlowRegistry workFlowRegistry;
+
+    @Mock
+    private SqsClient sqsClient;
+
+    @Mock
+    private Map<String, Step> stepRegistry;
+
+    @InjectMocks
+    private EventProcessorService eventProcessorService;
+
+    private Event event;
+    private StepConfig stepConfig;
+    private Step stepExecutor;
+
+    @BeforeEach
+    void setUp() {
+        event = mock(Event.class);
+        when(event.getEventType()).thenReturn("payroll.processed");
+
+        stepConfig = mock(StepConfig.class);
+        when(stepConfig.getName()).thenReturn("fetchPayroll");
+        when(stepConfig.isDisableRetry()).thenReturn(false);
+        when(stepConfig.getCondition()).thenReturn("always");
+
+        stepExecutor = mock(Step.class);
+    }
+
+    @Test
+    void shouldSkipProcessingIfNoWorkflowStepsFound() {
+        when(workFlowRegistry.getStepsForEvent(event.getEventType())).thenReturn(Collections.emptyList());
+
+        eventProcessorService.processEvent(event);
+
+        verify(workFlowRegistry, times(1)).getStepsForEvent(event.getEventType());
+        verifyNoInteractions(stepRegistry);
+    }
+
+    @Test
+    void shouldExecuteAllStepsSuccessfully() {
+        when(workFlowRegistry.getStepsForEvent(event.getEventType())).thenReturn(List.of(stepConfig));
+        when(stepRegistry.get("fetchPayroll")).thenReturn(stepExecutor);
+
+        eventProcessorService.processEvent(event);
+
+        verify(stepExecutor, times(1)).execute(event);
+    }
+
+    @Test
+    void shouldHandleStepNotFoundInRegistry() {
+        when(workFlowRegistry.getStepsForEvent(event.getEventType())).thenReturn(List.of(stepConfig));
+        when(stepRegistry.get("fetchPayroll")).thenReturn(null);
+
+        eventProcessorService.processEvent(event);
+
+        verify(stepRegistry, times(1)).get("fetchPayroll");
+        verifyNoMoreInteractions(stepExecutor);
+    }
+
+    @Test
+    void shouldRetryStepExecutionOnFailure() {
+        when(workFlowRegistry.getStepsForEvent(event.getEventType())).thenReturn(List.of(stepConfig));
+        when(workFlowRegistry.getRetryCountForStep(event.getEventType(), "fetchPayroll")).thenReturn(3);
+        when(workFlowRegistry.getBackoffDelay(event.getEventType(), "fetchPayroll", 1)).thenReturn(10);
+        when(stepRegistry.get("fetchPayroll")).thenReturn(stepExecutor);
+
+        doThrow(new RuntimeException("Step execution failed"))
+                .when(stepExecutor).execute(event);
+
+        eventProcessorService.processEvent(event);
+
+        verify(stepExecutor, times(1)).execute(event);
+        verify(sqsClient, times(1)).sendMessage(any(SendMessageRequest.class));
+    }
+
+    @Test
+    void shouldSkipStepExecutionWhenConditionIsNotMet() {
+        when(workFlowRegistry.getStepsForEvent(event.getEventType())).thenReturn(List.of(stepConfig));
+        when(stepConfig.getCondition()).thenReturn("futureDate");
+        when(event.getRouting()).thenReturn("ACH");  // Condition not matching
+        when(stepRegistry.get("fetchPayroll")).thenReturn(stepExecutor);
+
+        eventProcessorService.processEvent(event);
+
+        verify(stepExecutor, never()).execute(event);
+    }
+
+    @Test
+    void shouldSendToRetryQueueAfterExhaustingRetries() {
+        when(workFlowRegistry.getStepsForEvent(event.getEventType())).thenReturn(List.of(stepConfig));
+        when(stepRegistry.get("fetchPayroll")).thenReturn(stepExecutor);
+        when(workFlowRegistry.getRetryCountForStep(event.getEventType(), "fetchPayroll")).thenReturn(1);
+        when(workFlowRegistry.getBackoffDelay(event.getEventType(), "fetchPayroll", 2)).thenReturn(15);
+
+        doThrow(new RuntimeException("Step execution failed")).when(stepExecutor).execute(event);
+
+        eventProcessorService.processEvent(event);
+
+        verify(sqsClient, times(1)).sendMessage(any(SendMessageRequest.class));
+    }
+}
+package net.jpmchase.payroll.processor.steps.payroll;
+
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.model.EventPayload;
+import net.jpmchase.payroll.processor.model.MessageBody;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class DetermineRoutingStepTest {
+
+    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+
+    @InjectMocks
+    private DetermineRoutingStep determineRoutingStep;
+
+    @Mock
+    private Event event;
+
+    private EventPayload eventPayload;
+    private MessageBody messageBody;
+    private Map<String, Object> references;
+
+    @BeforeEach
+    void setUp() {
+        references = new HashMap<>();
+        eventPayload = mock(EventPayload.class);
+        messageBody = mock(MessageBody.class);
+
+        when(event.getMessageBody()).thenReturn(messageBody);
+        when(messageBody.getEventPayload()).thenReturn(eventPayload);
+        when(eventPayload.getReferences()).thenReturn(references);
+    }
+
+    @Test
+    void shouldRouteToSafePayForTodayPayroll() {
+        String today = LocalDate.now().format(DATE_FORMAT);
+        when(eventPayload.getReferences()).thenReturn(references);
+        when(eventPayload.getReferences().get("payroll_date")).thenReturn(today);
+
+        determineRoutingStep.execute(event);
+
+        assertEquals("SAFE_PAY", references.get("routing"));
+    }
+
+    @Test
+    void shouldRouteToEventBridgeForFuturePayroll() {
+        String futureDate = LocalDate.now().plusDays(2).format(DATE_FORMAT);
+        when(eventPayload.getReferences()).thenReturn(references);
+        when(eventPayload.getReferences().get("payroll_date")).thenReturn(futureDate);
+
+        determineRoutingStep.execute(event);
+
+        assertEquals("EVENT_BRIDGE", references.get("routing"));
+    }
+
+    @Test
+    void shouldIgnoreBackdatedPayroll() {
+        String pastDate = LocalDate.now().minusDays(2).format(DATE_FORMAT);
+        when(eventPayload.getReferences()).thenReturn(references);
+        when(eventPayload.getReferences().get("payroll_date")).thenReturn(pastDate);
+
+        determineRoutingStep.execute(event);
+
+        assertEquals("IGNORE", references.get("routing"));
+    }
+
+    @Test
+    void shouldHandleNullPayrollDate() {
+        when(eventPayload.getReferences()).thenReturn(references);
+        when(eventPayload.getReferences().get("payroll_date")).thenReturn(null);
+
+        assertThrows(NullPointerException.class, () -> determineRoutingStep.execute(event));
+    }
+
+    @Test
+    void shouldHandleInvalidDateFormat() {
+        when(eventPayload.getReferences()).thenReturn(references);
+        when(eventPayload.getReferences().get("payroll_date")).thenReturn("invalid-date");
+
+        assertThrows(Exception.class, () -> determineRoutingStep.execute(event));
+    }
+}
