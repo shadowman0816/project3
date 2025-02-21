@@ -1,0 +1,174 @@
+SafePay Integration Strategy & Implementation Plan
+
+1. Overview
+
+SafePay integration involves the processing of payroll funding via API calls and Kafka-based event streaming. The process needs to be resilient, handling retries, failures, and back-off logic while ensuring SafePay transactions are completed successfully.
+
+2. Goals
+	•	Implement a seamless payroll funding mechanism via SafePay.
+	•	Support both API-based (synchronous) and Kafka-based (asynchronous) transaction flows.
+	•	Ensure proper handling of failures, retries, and SafePay confirmation.
+	•	Support SafePay order cancellation when needed.
+
+3. Implementation Plan (Step-by-Step)
+
+This section provides a detailed breakdown of the implementation.
+
+Step 1: Determine Payroll Routing
+	•	Fetch Payroll Details from CIB → Gusto to determine payroll date.
+	•	Use DetermineRoutingStep to classify:
+	•	Same-day payroll → Route to SafePay.
+	•	Future-dated payroll → Schedule via EventBridge.
+	•	Backdated payroll → Ignore.
+
+Step 2: Create Funding Order (SafePay API)
+	•	Endpoint: POST /v2/orders
+	•	Request Parameters:
+	•	Headers:
+	•	Authorization: OAuth Bearer Token.
+	•	Trace-ID: Unique identifier for tracking.
+	•	Channel-Type, Channel-Identifier, Journey-Name, Content-Type, etc.
+	•	Body:
+	•	DDAFundingDetail: Account routing details.
+	•	ActivityType, PostingRequestTypeName, DepositTransactionTypeCode, etc.
+	•	Response Handling:
+	•	200 OK → Funding order created, proceed with SafePay confirmation.
+	•	400, 401, 403, 404 → Log and alert.
+	•	500+ Errors → Retry using exponential backoff.
+
+Step 3: Handle Funding Order Authorization
+	•	Endpoint: PUT /v2/orders
+	•	Purpose: Authorize a funding order.
+	•	Key Parameters:
+	•	Request Headers: Same as order creation.
+	•	Body Fields:
+	•	enterprisePartyIdentifier
+	•	sourceTransactionIdentifier
+	•	fundingTransactionAmount
+	•	fundingStatus (FUNDING_ACQUIRED or FUNDING_FAILED)
+	•	Response Handling:
+	•	200 OK → Funding successfully authorized.
+	•	Failure Cases:
+	•	500 → Retry using exponential backoff.
+	•	400/401 → Log error, manual intervention required.
+
+Step 4: SafePay Funding Inquiry (Polling or Kafka Listener)
+	•	Polling Approach (API)
+	•	Endpoint: GET /v2/orders/{fundingOrderIdentifier}
+	•	Response Statuses:
+	•	FUNDING_IN_PROGRESS_RETRY_LATER
+	•	FUNDING_ACQUIRED
+	•	FUNDING_FAILED
+	•	Poll until a final status is received.
+	•	Asynchronous Approach (Kafka)
+	•	SafePay publishes funding confirmation or failure to Kafka.
+	•	Payroll processor listens for funding_acquired or funding_failed events.
+	•	If funding_acquired, trigger ACH processing.
+
+Step 5: Handle SafePay Order Cancellation
+	•	Endpoint: PATCH /v2/orders/{fundingOrderIdentifier}
+	•	Purpose: Cancel a funding order if needed.
+	•	Conditions for Cancellation:
+	•	Payroll event is canceled before SafePay finalization.
+	•	Payroll fails validation post SafePay order creation.
+	•	Response Handling:
+	•	200 OK → Cancellation successful.
+	•	400/404 → Validate funding order status.
+
+Step 6: Retry & Failure Handling
+	•	Retries:
+	•	API failures (500, 503) → Exponential backoff retry.
+	•	SafePay order inquiries can be retried until a final status.
+	•	Kafka failures → Messages sent to a retry queue.
+	•	Backoff Configuration (application.yml)
+
+retry:
+  maxRetries: 3
+  exponentialBackoff:
+    initialDelaySeconds: 900
+    maxDelaySeconds: 14400
+    multiplier: 2
+
+4. Different Approaches to Implement SafePay Integration
+
+Approach 1: API-Based Processing (Synchronous)
+	1.	Step 1: Call SafePay API (POST /v2/orders) to create a funding order.
+	2.	Step 2: Call PUT /v2/orders for authorization.
+	3.	Step 3: Poll GET /v2/orders/{fundingOrderIdentifier} until confirmation.
+	4.	Step 4: Process payroll after confirmation.
+
+Pros:
+✔️ Immediate API response.
+✔️ Fully controlled retry mechanisms.
+✔️ No dependency on external event streaming.
+
+Cons:
+❌ API rate limits can slow down processing.
+❌ More direct API calls increase latency.
+
+Approach 2: Kafka-Based Processing (Asynchronous)
+	1.	Step 1: Publish funding_order_created to Kafka.
+	2.	Step 2: SafePay asynchronously processes and responds via Kafka.
+	3.	Step 3: Payroll processor listens for funding_acquired and triggers ACH.
+	4.	Step 4: If no response in X time, poll API as a fallback.
+
+Pros:
+✔️ Reduces API dependency and potential rate limiting.
+✔️ More scalable with event-driven architecture.
+✔️ Faster payroll processing due to parallel execution.
+
+Cons:
+❌ Requires event listener setup for SafePay Kafka events.
+❌ Delay in Kafka message processing may affect SLA.
+
+Approach 3: Hybrid (API + Kafka)
+	1.	Step 1: Attempt API call.
+	2.	Step 2: If SafePay does not return 200, switch to Kafka.
+	3.	Step 3: Publish a SafePay funding request to Kafka.
+	4.	Step 4: Wait for a Kafka response, fallback to polling if necessary.
+
+Pros:
+✔️ API-first approach with Kafka as a failover.
+✔️ Balances scalability and reliability.
+✔️ Reduces load on API endpoints.
+
+Cons:
+❌ Slightly complex implementation.
+❌ Requires fallback logic to switch between API and Kafka.
+
+5. Key Discussion Points with SafePay Team
+	1.	Kafka vs API
+	•	Can Kafka be the primary mechanism, or is API polling required?
+	•	If Kafka, what topics should be subscribed to?
+	2.	Error Handling & Retries
+	•	What SafePay errors require retries?
+	•	Recommended backoff strategy for transient errors.
+	3.	SafePay Order Cancellation
+	•	When can SafePay orders be canceled without penalty?
+	4.	Processing SLAs
+	•	Expected response time for funding authorization?
+	•	How long should SafePay hold transactions before processing?
+
+6. Conclusion & Recommendation
+
+Primary Approach: Hybrid (API + Kafka)
+	•	First attempt an API call, retrying transient failures.
+	•	If API does not return a 200 OK, publish event to Kafka for SafePay processing.
+	•	Listen on Kafka for funding confirmations.
+	•	Implement cancellation handling via PATCH /v2/orders/{fundingOrderIdentifier}.
+
+Next Steps:
+	•	Finalize SafePay integration strategy.
+	•	Implement SafePay funding order creation (POST).
+	•	Implement funding authorization (PUT).
+	•	Develop SafePay Kafka event consumer.
+	•	Implement retry and backoff strategies.
+	•	Validate end-to-end with test cases.
+
+Final Notes
+
+This document serves as both:
+	1.	A detailed implementation guide for the engineering team.
+	2.	A discussion framework for aligning with SafePay on technical aspects.
+
+Would you like to refine any specific section before presenting this to your team?
