@@ -1,0 +1,47 @@
+package com.company.payroll.scheduler;
+
+import software.amazon.awssdk.services.scheduler.SchedulerClient;
+import software.amazon.awssdk.services.scheduler.model.*;
+
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+
+public class EventBridgeSchedulerService {
+
+    private static final String EVENT_BUS_NAME = "default";
+    private static final String ROLE_ARN = "arn:aws:iam::account-id:role/EventBridgeExecutionRole";
+    private static final String SCHEDULE_GROUP = "PayrollRetryGroup"; // Optional grouping
+    private static final SchedulerClient schedulerClient = SchedulerClient.create();
+
+    public static void scheduleRetry(String eventType, String eventPayload, int delayInMinutes) {
+        String scheduleName = "Retry_" + eventType + "_" + System.currentTimeMillis();
+        String scheduleExpression = "at(" + formatInstant(Instant.now().plusSeconds(delayInMinutes * 60)) + ")";
+
+        CreateScheduleRequest scheduleRequest = CreateScheduleRequest.builder()
+                .name(scheduleName)
+                .scheduleExpression(scheduleExpression)
+                .scheduleExpressionTimezone("UTC")
+                .flexibleTimeWindow(FlexibleTimeWindow.builder().mode(FlexibleTimeWindowMode.OFF).build())
+                .target(Target.builder()
+                        .arn("arn:aws:events:region:account-id:event-bus/" + EVENT_BUS_NAME)
+                        .roleArn(ROLE_ARN)
+                        .input(eventPayload)
+                        .build())
+                .groupName(SCHEDULE_GROUP)
+                .build();
+
+        try {
+            CreateScheduleResponse response = schedulerClient.createSchedule(scheduleRequest);
+            System.out.println("Scheduled retry for " + eventType + " at " + scheduleExpression);
+        } catch (Exception e) {
+            System.err.println("Error scheduling event: " + e.getMessage());
+        }
+    }
+
+    private static String formatInstant(Instant instant) {
+        return DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
+                .withZone(ZoneOffset.UTC)
+                .format(instant);
+    }
+}
