@@ -8,3 +8,14 @@ Step,Same-Day Payroll Cancellation,Future-Dated Payroll Cancellation
 7️⃣ EventBridge Consideration,Not applicable (same-day payroll does not use EventBridge).,If payroll is scheduled via EventBridge, the scheduled event is removed to prevent execution.
 8️⃣ Employer Notification,Notify the employer of cancellation status (successful or failed due to processing constraints).,Notify the employer that payroll was successfully canceled before execution.
 9️⃣ Final Processing Status,If SafePay & ACH were successfully canceled, payroll is marked as Canceled.,Payroll event is deleted from the system with no further actions required.
+
+Step,Same-Day Payroll Cancellation,Future-Dated Payroll Cancellation
+1️⃣ Employer Requests Cancellation,Employer submits a cancellation request via UI after initiating payroll.,Employer submits a cancellation request via UI before the scheduled processing date.
+2️⃣ Identify Payroll Type,System determines if the payroll has already started processing.,System determines if the payroll is scheduled for a future date.
+3️⃣ Check Processing Status,If processing hasn’t started, cancellation is immediate.,If the payroll is scheduled but not started, cancellation is immediate.
+4️⃣ SafePay Status Check,If SafePay processing has not started, halt execution.,SafePay is not initiated yet, so no action is required.
+5️⃣ ACH Risk Validation,If SafePay was approved, send a PATCH request to SafePay to cancel authorization.,If ACH risk evaluation was performed, a cancellation request is sent to ACH.
+6️⃣ ACH Processing Check,If payroll was already sent to ACH but before 8 PM EST cutoff, ACH cancellation is attempted.,ACH instructions are only submitted on the execution date, so cancellation is straightforward.
+7️⃣ EventBridge Consideration,Not applicable (same-day payroll does not use EventBridge).,If payroll is scheduled via EventBridge, the scheduled event is removed to prevent execution.
+8️⃣ Employer Notification,Notify the employer of cancellation status (successful or failed due to processing constraints).,Notify the employer that payroll was successfully canceled before execution.
+9️⃣ Final Processing Status,If SafePay & ACH were successfully canceled, payroll is marked as Canceled.,Payroll event is deleted from the system with no further actions required.
