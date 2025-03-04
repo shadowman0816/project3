@@ -1,0 +1,96 @@
+Payroll cancellation is a critical process to ensure proper handling of employer requests. There are two main types of payroll cancellations:
+1️⃣ Same-Day Payroll Cancellation – The payroll is already in processing.
+2️⃣ Future-Dated Payroll Cancellation – The payroll is scheduled for a future date and hasn’t started processing.
+
+This document outlines:
+✅ How cancellation requests are received and processed.
+✅ How ACH, SafePay, and EventBridge are impacted.
+✅ Decision points for in-flight cancellations vs. waiting until processing completes.
+
+📖 Table of Contents
+
+1️⃣ Introduction
+2️⃣ Same-Day Payroll Cancellation
+3️⃣ Future-Dated Payroll Cancellation
+4️⃣ Decision Points
+5️⃣ Edge Cases & Considerations
+6️⃣ Conclusion
+
+Payroll cancellation can be initiated by the employer via UI or triggered by risk-related events.
+The cancellation workflow depends on when the request is received:
+
+Scenario,System Response
+Same-day payroll cancellation,Determines if processing is in progress and either halts or rolls back.
+Future-dated payroll cancellation,Cancels before execution and removes event from EventBridge & ACH Risk Processing.
+
+1️⃣ Employer initiates payroll cancellation  
+2️⃣ Determine processing step (SafePay, ACH, etc.)  
+3️⃣ Decision: Halt processing or wait until completion  
+4️⃣ If SafePay initiated → Send PATCH request to cancel  
+5️⃣ If ACH initiated → Request ACH cancellation before cutoff  
+6️⃣ Final status update & employer notified  
+
+Decision Points
+
+✅ Processing Not Started → Payroll is canceled immediately.
+✅ Processing Started (Before SafePay) → Halt execution, rollback steps.
+✅ SafePay Processed But ACH Not Yet → Send PATCH request to SafePay.
+✅ ACH Processed → ACH cancellation depends on cutoff time.
+
+🔹 Decision Points
+
+✅ Processing Not Started → Payroll is canceled immediately.
+✅ Processing Started (Before SafePay) → Halt execution, rollback steps.
+✅ SafePay Processed But ACH Not Yet → Send PATCH request to SafePay.
+✅ ACH Processed → ACH cancellation depends on cutoff time.
+
+🔹 Detailed Steps
+
+1️⃣ Employer requests cancellation in UI.
+2️⃣ System checks if processing has started.
+3️⃣ If not started, remove payroll from queue & notify employer.
+4️⃣ If processing has started:
+	•	Before SafePay: Halt processing.
+	•	After SafePay Authorization: Use SafePay PATCH API to cancel.
+	•	After ACH Submission: ACH may allow cancellation if before 8 PM EST cutoff.
+5️⃣ Notify employer of cancellation status.
+
+Future-Dated Payroll Cancellation
+1️⃣ Employer requests cancellation before payroll execution date  
+2️⃣ Check if ACH risk evaluation was already performed  
+3️⃣ If ACH risk evaluation occurred → Notify ACH to cancel risk evaluation  
+4️⃣ Remove payroll event from EventBridge scheduler  
+5️⃣ Notify employer that cancellation is successful  
+
+🔹 Decision Points
+
+✅ If payroll is not yet scheduled, remove from EventBridge & database.
+✅ If ACH risk check was already performed, send ACH cancellation request.
+✅ If SafePay & ACH were not triggered, payroll is canceled without issue.
+
+🔹 Detailed Steps
+
+1️⃣ Employer requests future-dated payroll cancellation.
+2️⃣ System checks if ACH risk evaluation has occurred:
+	•	YES → Send a cancel request to ACH.
+	•	NO → Remove event from database & EventBridge.
+3️⃣ Notify employer that payroll has been canceled successfully.
+
+Decision Points – In-Flight Cancellation vs. Waiting
+Scenario,System Response
+Payroll has not yet started processing,Cancellation is immediate, removed from all queues.
+Payroll is in SafePay Authorization,SafePay PATCH API cancels the transaction.
+Payroll has reached ACH Processing,If before 8 PM cutoff, ACH cancellation may be possible.
+ACH processing completed,Payroll cannot be canceled. Employer notified.
+Payroll is scheduled in EventBridge,Remove event from EventBridge scheduler.
+
+Scenario,System Response
+Employer cancels after ACH cutoff (8 PM EST),ACH processing cannot be canceled. Employer notified.
+Employer cancels payroll after SafePay approval,Use SafePay PATCH API to cancel.
+Employer updates payroll before execution date,Old payroll is canceled, and new payroll is scheduled.
+Duplicate cancellation requests received,Deduplication logic prevents unnecessary SafePay/ACH calls.
+
+
+
+
+
