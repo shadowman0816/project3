@@ -1,0 +1,78 @@
+Future-dated payroll processing refers to payrolls scheduled for a future date, where processing is deferred until the actual payroll execution date. This flow ensures the system handles all validations upfront and schedules the processing accurately, ensuring compliance with risk policies and ACH submission timelines.
+	•	Trigger: Employer submits a payroll request for a future date.
+	•	Initial Validations: Limit checks, eligibility, risk analysis.
+	•	Event Scheduling: The event is stored and scheduled via EventBridge.
+	•	Final Execution: On the processing date, payroll is retrieved, validated, and executed via SafePay and ACH.
+	•	Risk Handling: ACH performs a second risk evaluation before settlement.
+
+For future-dated payroll, the payroll does not require immediate processing, but it must pass critical checks at the time of submission. The system should:
+	•	✅ Ensure limit, eligibility, and risk checks are done upfront.
+	•	✅ Store the payroll event until the processing date.
+	•	✅ Schedule execution via EventBridge for later automatic processing.
+	•	✅ Perform a final risk evaluation on the execution date before sending to SafePay & ACH.
+
+1️⃣ Payroll Submitted (Gusto)  
+2️⃣ Limit, Eligibility, Risk Check  
+3️⃣ Store Payroll Event in Database  
+4️⃣ Risk API Validation (ACH)  
+5️⃣ EventBridge Scheduled Processing  
+6️⃣ On Execution Date: Retrieve Payroll  
+7️⃣ SafePay & ACH Processing  
+
+✅ If Payroll Date is Future → Schedule in EventBridge
+✅ If Payroll Fails ACH Risk Check → Employer Notified
+✅ If Employer Cancels Payroll → Stop Processing
+
+Step 1: Receive & Validate Webhook Event
+
+✅ Employer submits future-dated payroll from UI.
+✅ Gusto sends a webhook event with:
+	•	payrollId, companyId, payrollDate, amount, employeeList.
+✅ Event Manager validates & enqueues it into SQS queue.
+
+Step 2: Initial Validation & Risk Checks
+
+✅ Calls Limit Check Service to validate threshold.
+✅ Calls Eligibility Check to ensure employer compliance.
+✅ Calls ACH Risk API for risk evaluation:
+	•	Risk OK ✅ → Proceed with EventBridge scheduling.
+	•	Risk Suspended ❌ → Employer notified & given options:
+	•	Change Payment Method (Check vs. ACH).
+	•	Cancel Payroll.
+
+Step 3: Store Payroll & Schedule Execution
+
+✅ Payroll is stored in the database for future execution.
+✅ Payroll execution date is determined.
+✅ Event is scheduled via EventBridge for automatic processing.
+
+Step 4: Execution on Scheduled Date
+
+✅ On the processing date, EventBridge retrieves the payroll event.
+✅ Final risk check is performed.
+✅ Payroll is routed to SafePay & ACH for processing.
+
+Step 5: SafePay & ACH Processing
+
+✅ SafePay authorization request is sent.
+✅ SafePay responds with:
+	•	Funding Acquired ✅ → Proceed to ACH.
+	•	Funding Failed ❌ → Retry via EventBridge Scheduler (30 min delay).
+✅ If SafePay succeeds → Payroll moves to ACH Processing.
+✅ ACH submits payroll instructions for final settlement.
+
+Scenario,System Response
+Employer cancels before execution date,Remove from EventBridge, payroll is marked Canceled.
+Employer cancels after SafePay approval but before ACH,SafePay PATCH API cancels the authorization.
+ACH Risk API marks payroll as Risk Suspended,Employer is notified with options to change payment type or cancel.
+Payroll reaches execution date but fails SafePay,Retry logic applies, EventBridge reschedules after 30 min.
+Scenario,System Response
+Future-dated payroll submitted with incorrect date,UI prevents incorrect dates.
+Duplicate payroll event received,Deduplication logic prevents duplicate processing.
+SafePay authorization fails multiple times,Event is rescheduled in EventBridge to avoid infinite loops.
+Employer updates payroll before execution date,New payroll is validated again and replaces the old event.
+Payroll amount exceeds allowed limits,System blocks processing and routes to manual review.
+
+
+
+
