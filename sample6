@@ -1,0 +1,62 @@
+This document details the same-day payroll processing workflow, outlining each step from receiving the Gusto Webhook event to finalizing payroll via SafePay and ACH. It also includes failure handling, retry logic, and key considerations.
+1️⃣ Gusto Webhook Received  
+2️⃣ Validate & Enqueue in Event Manager  
+3️⃣ Event Processor Determines Payroll Date  
+4️⃣ Limit Check & Risk Evaluation  
+5️⃣ SafePay Authorization  
+6️⃣ ACH Processing & Finalization  
+
+
+✅ If payroll date is today → Same-day Processing
+❌ If payroll date is in the future → Future-dated Processing (handled separatel
+
+Step-by-Step Process
+
+Step 1: Receive & Validate Webhook Event
+
+✅ Gusto sends payroll.submitted webhook event.
+✅ The event contains:
+	•	payrollId, companyId, payrollDate, amount, employeesList.
+✅ The Event Manager validates and routes it to the SQS queue.
+
+Step 2: Event Processor Determines Processing Type
+
+✅ Reads event from SQS Queue (priority/non-priority).
+✅ Fetches payroll details from Gusto via CIB Proxy API.
+✅ Extracts payroll date and determines:
+	•	Today? → Proceed with same-day flow ✅
+	•	Future-dated? → Send to EventBridge for scheduled processing ⏳
+
+Step 3: Risk & Limit Checks
+
+✅ Calls Limit Check Service to validate payment threshold.
+✅ Calls Risk Analysis (RBAD) for fraud screening.
+✅ Calls Eligibility Check Service to ensure employer is allowed to process payroll.
+
+Step 4: Route to SafePay
+
+✅ If the payroll passes checks, it is sent to SafePay API for funding authorization.
+✅ SafePay performs funding verification and returns:
+	•	Funding Acquired ✅ → Proceed to ACH Processing.
+	•	Funding Failed ❌ → Retry via EventBridge Scheduler (after 30 min).
+
+Step 5: ACH Processing & Finalization
+
+✅ If SafePay succeeds, the payroll moves to ACH Payment Processing.
+✅ ACH collates payment instructions.
+✅ ACH finalizes settlement at 8 PM EST.
+✅ Employer receives confirmation notification.
+
+Failure Point,Action Taken,Retry Mechanism
+SafePay Authorization Fails,Retry after 30 minutes,EventBridge Scheduler
+ACH Submission Fails,Queue for next business day processing,Manual Intervention
+API Call to CIB Fails,Retry via Exponential Backoff,SQS Retry Queue
+Duplicate Payroll Processing,Prevent via Deduplication Check,Event Log Lookup
+
+Scenario,System Response
+Employer cancels payroll after submission but before processing,Stop processing, mark Canceled in event log.
+Employer cancels payroll after SafePay authorization but before ACH,SafePay PATCH API cancels payment, ACH not triggered.
+Payroll submission close to 8 PM EST cutoff,If SafePay not completed, ACH is queued for next day.
+Duplicate payroll event received,Deduplication logic prevents duplicate processing.
+SafePay fails multiple times,Retry logic in EventBridge Scheduler to avoid infinite loops.
+Payroll amount exceeds allowed limits,System routes to Counterparty Utility for manual review.
