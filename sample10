@@ -1,0 +1,82 @@
+**PaaS Settlement Process and Discussion Document**
+
+**1. Overview**
+This document outlines the settlement process for payroll transactions via PaaS, detailing the steps involved, integration with SafePay, Kafka message flow, technical failure points, and edge cases. The document serves as a preparation for discussions with the PaaS team.
+
+---
+
+**2. Payroll Settlement Flow**
+1. Payroll-submitted event received from Gusto (webhook event).
+2. Event routed through CIB and processed by the Event Manager.
+3. Processor performs validations:
+   - Limit check
+   - Risk assessment (RBAD)
+   - Eligibility check
+4. Processor submits the validated transaction to SafePay.
+5. SafePay processes the funding:
+   - Deducts money from the employer’s funding account.
+   - Transfers money to the General Ledger (GL):
+     - Employee payments go to In-Process GL.
+     - Tax payments go to Tax GL (both credit and debit).
+6. Settlement with PaaS:
+   - PaaS is responsible for final settlement but SafePay will not trigger the call.
+   - Payroll application needs to trigger the PaaS settlement process.
+
+---
+
+**3. PaaS Integration Approach**
+- PaaS currently uses Kafka for messaging (APIs are available but Kafka is preferred).
+- Dedicated Kafka setup is required for communication.
+- Three key Kafka endpoints need to be established:
+  1. **Summary Endpoint** - Provides an overview of transactions ready for settlement.
+  2. **Cancel Endpoint** - Handles cancellations of payroll transactions.
+  3. **Finalization Endpoint** - Marks transactions as settled.
+- Need to coordinate with Vishnu to set up Kafka topics.
+
+---
+
+**4. Technical Failure Points**
+- **Failure in SafePay processing**: If money is deducted but not credited to GL, rollback is needed.
+- **Kafka Message Delivery Issues**: Messages can be lost or duplicated; need an idempotency mechanism.
+- **PaaS Unavailability**: What happens if PaaS is down when settlement is triggered?
+- **Duplicate Processing**: If the same payroll is processed twice due to retries or system crashes.
+- **Reconciliation Failures**: GL balances may not match due to missing or delayed transactions.
+- **Cancel Request Delays**: If a cancellation is sent after a payroll has been settled.
+- **Late Processing of Future-Dated Payrolls**: Ensure the system schedules and triggers future settlements correctly.
+
+---
+
+**5. Edge Cases**
+- **Payroll Submitted Twice:** Prevent duplicate transactions from being processed.
+- **Cancel After Processing Started:** Define at which step a cancellation is allowed.
+- **SafePay Settlement Succeeded but PaaS Failed:** Handle partial failure cases.
+- **Risk Evaluation Failed:** Should payrolls with risk issues be held or canceled?
+- **Employer Funding Account Insufficient Funds:** Retry mechanism or alternate funding source.
+- **Kafka Consumer Failure:** If a consumer crashes mid-processing, messages must be retried correctly.
+- **Multi-day Settlement Scenarios:** Handling settlements for payrolls spanning multiple days.
+
+---
+
+**6. Next Steps**
+- Set up a dedicated Kafka environment for payroll settlements.
+- Define the request and response structure for Kafka messages.
+- Align with PaaS team on expected behaviors and failure handling.
+- Implement safeguards for failure recovery and duplicate prevention.
+- Document decision points for handling cancellations and rollbacks.
+- Create a Confluence page summarizing this document for team reference.
+
+---
+
+**7. Meeting Agenda for PaaS Discussion**
+- Overview of Payroll Settlement Flow.
+- SafePay Integration with PaaS.
+- Kafka Communication Setup.
+- Handling Technical Failures.
+- Discussion on Edge Cases.
+- Next Steps and Action Items.
+
+---
+
+**8. Conclusion**
+This document serves as a comprehensive reference for the PaaS settlement process, covering technical integrations, potential failure points, and key discussion topics for the upcoming meeting. The goal is to ensure a smooth transition to handling settlement within the payroll application while mitigating risks and ensuring data integrity.
+
