@@ -388,3 +388,125 @@ public class EventProcessorService {
         log.info("Scheduling retry for {} in backoff period", step);
     }
 }
+
+package net.jpmchase.payroll.processor.common.config;
+
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
+public class StepConfig {
+    private String name;
+    private String condition;
+    private boolean disableRetry;
+    private boolean cancellable;
+    private int immediateRetryCount;
+    private BackOffRetry backOffRetry;
+
+    @Getter
+    @Setter
+    public static class BackOffRetry {
+        private boolean enabled;
+        private int maxBackOffHours;
+        private String cutoffTime;
+    }
+}
+
+package net.jpmchase.payroll.processor.service;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.common.config.StepConfig;
+import net.jpmchase.payroll.processor.common.config.WorkFlowConfig;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalTime;
+import java.util.List;
+import java.util.Map;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class EventProcessorService {
+
+    private final WorkFlowConfig workFlowConfig;
+    private final Map<String, StepExecutor> stepRegistry;
+
+    public void processEvent(Event event) {
+        List<StepConfig> steps = workFlowConfig.getGroup().get(event.getEventType());
+
+        if (steps == null || steps.isEmpty()) {
+            log.warn("No workflow found for event '{}'. Skipping processing.", event.getEventType());
+            return;
+        }
+
+        for (StepConfig stepConfig : steps) {
+            executeStepWithRetry(stepConfig, event, 0);
+        }
+    }
+
+    private void executeStepWithRetry(StepConfig stepConfig, Event event, int retryCount) {
+        StepExecutor stepExecutor = stepRegistry.get(stepConfig.getName());
+
+        if (stepExecutor == null) {
+            log.warn("Step '{}' not found for event '{}'", stepConfig.getName(), event.getEventType());
+            return;
+        }
+
+        if (!evaluateCondition(stepConfig.getCondition(), event)) {
+            log.info("[PROCESSOR] Skipping step '{}' due to condition '{}'", stepConfig.getName(), stepConfig.getCondition());
+            return;
+        }
+
+        if (stepConfig.isDisableRetry()) {
+            try {
+                stepExecutor.execute(event);
+                log.info("[PROCESSOR] Step '{}' executed successfully (No Retry Allowed)", stepConfig.getName());
+            } catch (Exception e) {
+                log.error("[PROCESSOR] Step '{}' failed. No retries allowed. Error: {}", stepConfig.getName(), e.getMessage());
+            }
+            return;
+        }
+
+        while (retryCount < stepConfig.getImmediateRetryCount()) {
+            try {
+                log.info("Executing step '{}' (Attempt {}/{})", stepConfig.getName(), retryCount + 1, stepConfig.getImmediateRetryCount());
+                stepExecutor.execute(event);
+                return;
+            } catch (Exception e) {
+                retryCount++;
+                log.error("Step '{}' failed (Retry {}/{}). Retrying...", stepConfig.getName(), retryCount, stepConfig.getImmediateRetryCount());
+            }
+        }
+
+        if (stepConfig.getBackOffRetry() != null && stepConfig.getBackOffRetry().isEnabled()) {
+            handleBackOffRetry(stepConfig, event);
+        }
+    }
+
+    private void handleBackOffRetry(StepConfig stepConfig, Event event) {
+        StepConfig.BackOffRetry backOffSettings = stepConfig.getBackOffRetry();
+
+        LocalTime cutoff = LocalTime.parse(backOffSettings.getCutoffTime());
+        LocalTime now = LocalTime.now();
+        
+        if (now.isAfter(cutoff)) {
+            log.warn("Cutoff time {} reached, skipping back-off retry for step '{}'", cutoff, stepConfig.getName());
+            return;
+        }
+
+        log.info("Scheduling back-off retry for step '{}' within {} hours", stepConfig.getName(), backOffSettings.getMaxBackOffHours());
+        scheduleRetry(event, stepConfig.getName(), backOffSettings.getMaxBackOffHours());
+    }
+
+    private void scheduleRetry(Event event, String step, int delayHours) {
+        log.info("Scheduling retry for step '{}' in {} hours...", step, delayHours);
+        // Logic to schedule retry using EventBridge or another job scheduler.
+    }
+
+    private boolean evaluateCondition(String condition, Event event) {
+        return "always".equalsIgnoreCase(condition) || (event.getRouting() != null && condition.contains(event.getRouting()));
+    }
+}
+
