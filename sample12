@@ -1,0 +1,251 @@
+Payroll Event Processing - Transitional States & Status Flow
+
+Introduction
+
+This document outlines the various transitional states for payroll processing and how the statuses will be maintained across different tables in the system. The primary focus is to track event transitions across:
+	•	Event Log Table
+	•	Payroll Table
+	•	Payroll Transaction Table
+	•	Payee Transaction Table
+	•	Retry Table
+
+The document also explains the retry logic with cutoff conditions and the different statuses each table will hold at various steps in the process.
+
+⸻
+
+1. Statuses Across Tables
+
+1.1 Event Log Table
+
+This table acts as a receipt for the event and tracks the processing state of each event received.
+Status
+Description
+EVENT_RECEIVED
+Event received from Gusto Webhook.
+VALIDATION_STARTED
+Initial validation checks started.
+VALIDATION_FAILED
+Validation failed; event rejected.
+VALIDATION_SUCCESSFUL
+Event validation completed successfully.
+PROCESSOR_CONSUMED
+Processor has picked up the event.
+SAFE_PAY_SENT
+Event sent to SafePay via Kafka.
+SAFE_PAY_RESPONSE_RECEIVED
+Response received from SafePay.
+PASS_SENT
+Event sent to PASS (Settlement Service).
+PASS_RESPONSE_RECEIVED
+Response received from PASS.
+ACH_SENT
+Event sent to ACH processing.
+ACH_RESPONSE_RECEIVED
+Response received from ACH.
+PROCESS_COMPLETED
+Processing completed successfully.
+FAILED
+Processing failed.
+RETRY_SCHEDULED
+Event scheduled for retry due to failure.
+
+
+⸻
+
+1.2 Payroll Table (Parent Table for Payroll Transactions)
+
+This table stores the overall payroll processing state.
+
+Status
+Description
+PENDING
+Payroll event received, awaiting validation.
+VALIDATION_SUCCESSFUL
+Payroll validation completed.
+PROCESSING
+Payroll processing started.
+SAFE_PAY_INITIATED
+SafePay transaction initiated.
+SAFE_PAY_COMPLETED
+SafePay processing successful.
+PASS_INITIATED
+Settlement process initiated.
+PASS_COMPLETED
+Settlement completed.
+ACH_INITIATED
+ACH processing started.
+ACH_COMPLETED
+ACH processing successful.
+FAILED
+Payroll processing failed.
+RETRY
+Payroll is being retried.
+
+Status
+Description
+PENDING
+Payroll event received, awaiting validation.
+VALIDATION_SUCCESSFUL
+Payroll validation completed.
+PROCESSING
+Payroll processing started.
+SAFE_PAY_INITIATED
+SafePay transaction initiated.
+SAFE_PAY_COMPLETED
+SafePay processing successful.
+PASS_INITIATED
+Settlement process initiated.
+PASS_COMPLETED
+Settlement completed.
+ACH_INITIATED
+ACH processing started.
+ACH_COMPLETED
+ACH processing successful.
+FAILED
+Payroll processing failed.
+RETRY
+Payroll is being retried.
+
+
+
+
+⸻
+
+1.3 Payroll Transaction Table (Child Table for Payroll Payments)
+
+This table holds individual payroll transactions.
+
+Status
+Description
+PENDING
+Transaction received but not processed.
+PROCESSING
+Transaction is being processed.
+SAFE_PAY_PENDING
+SafePay transaction pending.
+SAFE_PAY_COMPLETED
+SafePay transaction successful.
+PASS_PENDING
+Settlement pending.
+PASS_COMPLETED
+Settlement successful.
+ACH_PENDING
+ACH transaction pending.
+ACH_COMPLETED
+ACH transaction successful.
+FAILED
+Transaction failed.
+RETRY
+Transaction is being retried.
+
+Status
+Description
+PENDING
+Transaction received but not processed.
+PROCESSING
+Transaction is being processed.
+SAFE_PAY_PENDING
+SafePay transaction pending.
+SAFE_PAY_COMPLETED
+SafePay transaction successful.
+PASS_PENDING
+Settlement pending.
+PASS_COMPLETED
+Settlement successful.
+ACH_PENDING
+ACH transaction pending.
+ACH_COMPLETED
+ACH transaction successful.
+FAILED
+Transaction failed.
+RETRY
+Transaction is being retried.
+
+
+
+⸻
+
+1.4 Payee Transaction Table (Tracks Payments to Individual Payees)
+Status
+Description
+PENDING
+Payee transaction received.
+PROCESSING
+Processing started for payee.
+SAFE_PAY_COMPLETED
+Payment cleared by SafePay.
+PASS_COMPLETED
+Settlement completed.
+ACH_COMPLETED
+ACH deposit completed.
+FAILED
+Payee payment failed.
+RETRY
+Payee payment being retried.
+
+
+
+⸻
+
+1.5 Retry Table (Tracks Retries)
+
+Retry logic is applied for failures with conditions such as max retries or cutoff time.
+Status
+Description
+RETRY_SCHEDULED
+Event scheduled for retry.
+RETRY_IN_PROGRESS
+Retry processing started.
+RETRY_SUCCESSFUL
+Retry attempt was successful.
+RETRY_FAILED
+Retry attempt failed.
+CUTOFF_REACHED
+Retry not allowed after cutoff time.
+
+
+
+⸻
+
+2. Step-by-Step Status Flow
+
+2.1 Payroll Processing (Same-Day Example)
+	1.	Event Received: Payroll submitted event is logged in Event Log Table with EVENT_RECEIVED status.
+	2.	Validation: Runs validation checks, updates status to VALIDATION_STARTED and then VALIDATION_SUCCESSFUL or VALIDATION_FAILED.
+	3.	Processing Starts: Processor picks up event, updates status to PROCESSOR_CONSUMED.
+	4.	SafePay: Payroll funds initiated, SAFE_PAY_SENT.
+	5.	SafePay Response: SafePay responds, updates status to SAFE_PAY_RESPONSE_RECEIVED.
+	6.	PASS Settlement: Transaction sent for settlement, updates to PASS_SENT.
+	7.	PASS Response: Settlement response received, updates to PASS_RESPONSE_RECEIVED.
+	8.	ACH Processing: If applicable, updates status to ACH_SENT.
+	9.	ACH Response: ACH response received, updates status to ACH_RESPONSE_RECEIVED.
+	10.	Completion: If all transactions succeed, the payroll status updates to PROCESS_COMPLETED.
+
+⸻
+
+2.2 Retry Logic (Back-Off Handling)
+	•	If a step fails, a retry entry is created in the Retry Table with RETRY_SCHEDULED status.
+	•	A retry scheduler job (EventBridge) picks up failed transactions and retries based on:
+	•	Max retry attempts (e.g., 3 retries in 3 hours).
+	•	Cutoff time (e.g., No retries allowed after 6:30 PM EST).
+	•	If retries fail, status updates to RETRY_FAILED, otherwise to RETRY_SUCCESSFUL.
+
+⸻
+
+3. Conclusion
+
+This document serves as a reference for tracking event statuses across multiple stages in payroll processing. It ensures visibility into each state, helps with error handling, and defines a robust retry mechanism to prevent loss of transactions due to transient failures.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
