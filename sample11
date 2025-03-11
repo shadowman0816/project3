@@ -1,3 +1,19 @@
+workflow:
+  payroll.submitted:
+    - name: fetchPayrollDetails
+      condition: always
+      disableRetry: false
+      cancellable: true
+      immediateRetryCount: 2
+      backoffRetry:
+        enabled: true
+        maxBackoffHours: 3
+        cutoffTime: "18:30"  # 6:30 PM EST
+        initialDelaySeconds: 900  # 15 minutes
+        maxDelaySeconds: 14400  # 4 hours max delay
+        multiplier: 2
+
+
 package net.jpmchase.payroll.processor.service;
 
 import net.jpmchase.payroll.processor.common.aspect.EventLogAspect;
