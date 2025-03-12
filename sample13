@@ -1,0 +1,90 @@
+package net.jpmchase.payroll.processor.common.aspect;
+
+import net.jpmchase.payroll.processor.common.entity.EventLogEntity;
+import net.jpmchase.payroll.processor.common.model.Event;
+import net.jpmchase.payroll.processor.common.repository.EventLogRepository;
+import org.aspectj.lang.ProceedingJoinPoint;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.*;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class EventLogAspectTest {
+
+    @Mock
+    private EventLogRepository eventLogRepository;
+
+    @InjectMocks
+    private EventLogAspect eventLogAspect;
+
+    private Event mockEvent;
+
+    @BeforeEach
+    void setUp() {
+        mockEvent = new Event();
+        mockEvent.setEventUuid(UUID.randomUUID());
+        mockEvent.setEventType("PAYROLL_SUBMITTED");
+    }
+
+    @Test
+    void testTrackStepExecution_Successful() throws Throwable {
+        // Mock ProceedingJoinPoint
+        ProceedingJoinPoint mockJoinPoint = mock(ProceedingJoinPoint.class);
+        when(mockJoinPoint.getSignature().getName()).thenReturn("fetchPayrollDetails");
+        when(mockJoinPoint.getArgs()).thenReturn(new Object[]{mockEvent});
+        when(mockJoinPoint.proceed()).thenReturn("Success");
+
+        EventLogEntity eventLogEntity = new EventLogEntity();
+        when(eventLogRepository.findBySrcEvtId(mockEvent.getEventUuid().toString())).thenReturn(eventLogEntity);
+
+        Object result = eventLogAspect.trackStepExecution(mockJoinPoint);
+
+        assertEquals("Success", result);
+        verify(eventLogRepository, times(2)).save(any(EventLogEntity.class));
+    }
+
+    @Test
+    void testTrackStepExecution_Failure() throws Throwable {
+        // Mock ProceedingJoinPoint
+        ProceedingJoinPoint mockJoinPoint = mock(ProceedingJoinPoint.class);
+        when(mockJoinPoint.getSignature().getName()).thenReturn("fetchPayrollDetails");
+        when(mockJoinPoint.getArgs()).thenReturn(new Object[]{mockEvent});
+        when(mockJoinPoint.proceed()).thenThrow(new RuntimeException("Step failed"));
+
+        EventLogEntity eventLogEntity = new EventLogEntity();
+        when(eventLogRepository.findBySrcEvtId(mockEvent.getEventUuid().toString())).thenReturn(eventLogEntity);
+
+        Exception exception = assertThrows(RuntimeException.class, () -> eventLogAspect.trackStepExecution(mockJoinPoint));
+
+        assertEquals("Step failed", exception.getMessage());
+        verify(eventLogRepository, times(2)).save(any(EventLogEntity.class)); // Once for PROCESSOR_CONSUMED, once for FAILED
+    }
+
+    @Test
+    void testUpdateEventLog_NewLogEntry() {
+        when(eventLogRepository.findBySrcEvtId(mockEvent.getEventUuid().toString())).thenReturn(null);
+
+        eventLogAspect.updateEventLog(mockEvent, "fetchPayrollDetails", "SUCCESS", null);
+
+        verify(eventLogRepository, times(1)).save(any(EventLogEntity.class));
+    }
+
+    @Test
+    void testUpdateEventLog_ExistingLogEntry() {
+        EventLogEntity eventLogEntity = new EventLogEntity();
+        when(eventLogRepository.findBySrcEvtId(mockEvent.getEventUuid().toString())).thenReturn(eventLogEntity);
+
+        eventLogAspect.updateEventLog(mockEvent, "fetchPayrollDetails", "FAILED", "Error occurred");
+
+        assertEquals("FAILED", eventLogEntity.getStatus());
+        assertEquals("Error occurred", eventLogEntity.getFailureReason());
+        verify(eventLogRepository, times(1)).save(eventLogEntity);
+    }
+}
