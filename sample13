@@ -192,3 +192,94 @@ class WorkFlowRegistryTest {
         assertEquals(0, backOffRetry);
     }
 }
+
+package net.jpmchase.payroll.processor.steps.payroll;
+
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.remote.gusto.model.payroll.Payroll;
+import net.jpmchase.payroll.processor.service.GustoPayrollService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class FetchPayrollDetailsStepTest {
+
+    @Mock
+    private GustoPayrollService payrollService;
+
+    @InjectMocks
+    private FetchPayrollDetailsStep fetchPayrollDetailsStep;
+
+    private WorkflowContext context;
+    private Event event;
+
+    @BeforeEach
+    void setUp() {
+        // Mock Event Object
+        event = new Event();
+        event.setEntityUUID("123e4567-e89b-12d3-a456-426614174000");
+        event.setResourceUUID("987f6543-e21c-45b6-8a78-5d6320190000");
+        event.setEventType("payroll.submitted");
+
+        // Mock WorkflowContext
+        context = new WorkflowContext();
+        context.put("event", event);
+    }
+
+    @Test
+    void testExecute_Success() {
+        // Mock Payroll Response
+        Payroll payrollResponse = mock(Payroll.class);
+        when(payrollResponse.getPayrollDate()).thenReturn("2024-03-15");
+
+        when(payrollService.getSinglePayroll(anyString(), anyString())).thenReturn(payrollResponse);
+
+        // Execute Step
+        fetchPayrollDetailsStep.execute(context);
+
+        // Verify Context Updates
+        assertEquals("2024-03-15", context.get("payrollDate", String.class));
+        assertEquals("success", context.getStatus());
+
+        // Verify Logging & Service Calls
+        verify(payrollService, times(1)).getSinglePayroll(anyString(), anyString());
+    }
+
+    @Test
+    void testExecute_MissingEventData() {
+        // Remove Event from Context
+        context.remove("event");
+
+        Exception exception = assertThrows(NullPointerException.class, () -> {
+            fetchPayrollDetailsStep.execute(context);
+        });
+
+        assertTrue(exception.getMessage().contains("event"));
+    }
+
+    @Test
+    void testExecute_PayrollServiceFailure() {
+        when(payrollService.getSinglePayroll(anyString(), anyString())).thenThrow(new RuntimeException("Service unavailable"));
+
+        Exception exception = assertThrows(RuntimeException.class, () -> {
+            fetchPayrollDetailsStep.execute(context);
+        });
+
+        assertEquals("Service unavailable", exception.getMessage());
+
+        // Ensure context status does not update
+        assertNull(context.get("payrollDate", String.class));
+        assertNull(context.getStatus());
+
+        // Verify Logging & Service Calls
+        verify(payrollService, times(1)).getSinglePayroll(anyString(), anyString());
+    }
+}
