@@ -352,3 +352,203 @@ class SameVsFutDatePayrollStepTest {
     }
 }
 
+package net.jpmchase.payroll.processor.common.context;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalTime;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class WorkFlowContextTest {
+
+    private WorkFlowContext workflowContext;
+
+    @BeforeEach
+    void setUp() {
+        workflowContext = new WorkFlowContext();
+    }
+
+    @Test
+    void testPutAndGet() {
+        workflowContext.put("key1", "value1");
+        assertEquals("value1", workflowContext.get("key1"));
+    }
+
+    @Test
+    void testContainsKey() {
+        workflowContext.put("key2", 123);
+        assertTrue(workflowContext.containsKey("key2"));
+        assertFalse(workflowContext.containsKey("key3"));
+    }
+
+    @Test
+    void testGetWithTypeCasting() {
+        workflowContext.put("key3", 456);
+        int value = workflowContext.get("key3", Integer.class);
+        assertEquals(456, value);
+    }
+
+    @Test
+    void testRemove() {
+        workflowContext.put("key4", "testValue");
+        assertEquals("testValue", workflowContext.remove("key4", String.class));
+        assertNull(workflowContext.get("key4"));
+    }
+
+    @Test
+    void testIsWithinBackoffPeriod_BeforeCutoff() {
+        Duration allowedDuration = Duration.ofHours(3);
+        LocalTime futureCutoff = LocalTime.now().plusHours(2);
+
+        assertTrue(workflowContext.isWithinBackoffPeriod(allowedDuration, futureCutoff));
+    }
+
+    @Test
+    void testIsWithinBackoffPeriod_AfterCutoff() {
+        Duration allowedDuration = Duration.ofHours(1);
+        LocalTime pastCutoff = LocalTime.now().minusHours(2);
+
+        assertFalse(workflowContext.isWithinBackoffPeriod(allowedDuration, pastCutoff));
+    }
+
+    @Test
+    void testIsWithinBackoffPeriod_ExactCutoff() {
+        Duration allowedDuration = Duration.ofMinutes(5);
+        LocalTime exactCutoff = LocalTime.now();
+
+        assertTrue(workflowContext.isWithinBackoffPeriod(allowedDuration, exactCutoff));
+    }
+}
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+import net.jpmchase.payroll.processor.service.EventProcessorService;
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.registry.WorkFlowRegistry;
+import net.jpmchase.payroll.processor.config.StepConfig;
+import net.jpmchase.payroll.processor.steps.Step;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+
+@ExtendWith(MockitoExtension.class)
+public class EventProcessorServiceTest {
+
+    @Mock
+    private WorkFlowRegistry workFlowRegistry;
+    
+    @Mock
+    private Map<String, Step> stepRegistry;
+
+    @InjectMocks
+    private EventProcessorService eventProcessorService;
+
+    private Event event;
+    private WorkflowContext context;
+    private StepConfig stepConfig;
+    private Step step;
+
+    @BeforeEach
+    void setup() {
+        event = mock(Event.class);
+        context = new WorkflowContext();
+        stepConfig = mock(StepConfig.class);
+        step = mock(Step.class);
+
+        when(event.getEntityType()).thenReturn("Payroll");
+        when(event.getEventType()).thenReturn("payroll.submitted");
+    }
+
+    @Test
+    void testProcessEvent_Success() {
+        when(workFlowRegistry.getStepsForEvent(anyString(), anyString())).thenReturn(List.of(stepConfig));
+        when(stepConfig.getName()).thenReturn("fetchPayrollDetails");
+        when(stepRegistry.get("fetchPayrollDetails")).thenReturn(step);
+
+        eventProcessorService.processEvent(event);
+
+        assertEquals("completed", context.getStatus());
+    }
+
+    @Test
+    void testProcessEvent_NoWorkflowFound() {
+        when(workFlowRegistry.getStepsForEvent(anyString(), anyString())).thenReturn(List.of());
+        eventProcessorService.processEvent(event);
+
+        assertNotEquals("completed", context.getStatus());
+    }
+
+    @Test
+    void testExecuteStepWithRetry_Success() {
+        when(stepConfig.getImmediateRetryCount()).thenReturn(2);
+        when(stepRegistry.get("fetchPayrollDetails")).thenReturn(step);
+        
+        eventProcessorService.processEvent(event);
+
+        verify(step, times(1)).execute(any(WorkflowContext.class));
+    }
+
+    @Test
+    void testExecuteStepWithRetry_FailureWithRetries() {
+        when(stepConfig.getImmediateRetryCount()).thenReturn(3);
+        when(stepRegistry.get("fetchPayrollDetails")).thenReturn(step);
+        doThrow(new RuntimeException("Step failed")).when(step).execute(any(WorkflowContext.class));
+        
+        eventProcessorService.processEvent(event);
+
+        verify(step, times(3)).execute(any(WorkflowContext.class));
+    }
+
+    @Test
+    void testEvaluateCondition_AlwaysTrue() {
+        when(stepConfig.getCondition()).thenReturn("always");
+        boolean result = eventProcessorService.evaluateCondition(stepConfig, context);
+        assertTrue(result);
+    }
+
+    @Test
+    void testEvaluateCondition_ContextBased() {
+        context.put("routing", "PROCESS_PAYROLL");
+        when(stepConfig.getCondition()).thenReturn("routing == PROCESS_PAYROLL");
+        boolean result = eventProcessorService.evaluateCondition(stepConfig, context);
+        assertTrue(result);
+    }
+
+    @Test
+    void testBackOffRetry_SchedulesCorrectly() {
+        when(stepConfig.getBackOffRetry().isEnabled()).thenReturn(true);
+        when(stepConfig.getBackOffRetry().getMaxBackoffHours()).thenReturn(3);
+        
+        eventProcessorService.handleBackOffRetry(stepConfig, context);
+
+        assertTrue(context.isWithinBackoffPeriod(Duration.ofHours(3), LocalTime.of(18, 30)));
+    }
+
+    @Test
+    void testFindStepIndex_Found() {
+        List<StepConfig> steps = List.of(new StepConfig("fetchPayrollDetails"), new StepConfig("limitCheck"));
+        int index = eventProcessorService.findStepIndex(steps, "limitCheck");
+        assertEquals(1, index);
+    }
+
+    @Test
+    void testFindStepIndex_NotFound() {
+        List<StepConfig> steps = List.of(new StepConfig("fetchPayrollDetails"));
+        int index = eventProcessorService.findStepIndex(steps, "nonExistingStep");
+        assertEquals(-1, index);
+    }
+}
+
+
+
