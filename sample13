@@ -88,3 +88,107 @@ class EventLogAspectTest {
         verify(eventLogRepository, times(1)).save(eventLogEntity);
     }
 }
+package net.jpmchase.payroll.processor.registry;
+
+import net.jpmchase.payroll.processor.common.config.StepConfig;
+import net.jpmchase.payroll.processor.common.config.WorkFlowConfig;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.*;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class WorkFlowRegistryTest {
+
+    @Mock
+    private WorkFlowConfig workFlowConfig;
+
+    @InjectMocks
+    private WorkFlowRegistry workFlowRegistry;
+
+    private final String ENTITY_TYPE = "Payroll";
+    private final String EVENT_TYPE = "payroll.submitted";
+    private final String STEP_NAME = "fetchPayrollDetails";
+
+    private StepConfig stepConfig;
+
+    @BeforeEach
+    void setUp() {
+        stepConfig = new StepConfig();
+        stepConfig.setName(STEP_NAME);
+        stepConfig.setImmediateRetryCount(2);
+
+        StepConfig.BackOffSettings backOffSettings = new StepConfig.BackOffSettings();
+        backOffSettings.setEnabled(true);
+        backOffSettings.setMaxBackOffHours(3);
+        stepConfig.setBackOffRetry(backOffSettings);
+
+        Map<String, List<StepConfig>> eventTypeMap = new HashMap<>();
+        eventTypeMap.put(EVENT_TYPE, Collections.singletonList(stepConfig));
+
+        Map<String, Map<String, List<StepConfig>>> groupMap = new HashMap<>();
+        groupMap.put(ENTITY_TYPE, eventTypeMap);
+
+        when(workFlowConfig.getGroups()).thenReturn(groupMap);
+    }
+
+    @Test
+    void testGetStepsForEvent_ValidEvent() {
+        List<StepConfig> steps = workFlowRegistry.getStepsForEvent(ENTITY_TYPE, EVENT_TYPE);
+        assertNotNull(steps);
+        assertFalse(steps.isEmpty());
+        assertEquals(STEP_NAME, steps.get(0).getName());
+    }
+
+    @Test
+    void testGetStepsForEvent_InvalidEvent() {
+        List<StepConfig> steps = workFlowRegistry.getStepsForEvent("InvalidEntity", "invalid.event");
+        assertNotNull(steps);
+        assertTrue(steps.isEmpty());
+    }
+
+    @Test
+    void testGetStepConfig_ValidStep() {
+        StepConfig result = workFlowRegistry.getStepConfig(ENTITY_TYPE, EVENT_TYPE, STEP_NAME);
+        assertNotNull(result);
+        assertEquals(STEP_NAME, result.getName());
+    }
+
+    @Test
+    void testGetStepConfig_InvalidStep() {
+        StepConfig result = workFlowRegistry.getStepConfig(ENTITY_TYPE, EVENT_TYPE, "InvalidStep");
+        assertNull(result);
+    }
+
+    @Test
+    void testGetRetryCountForStep_ValidStep() {
+        int retryCount = workFlowRegistry.getRetryCountForStep(ENTITY_TYPE, EVENT_TYPE, STEP_NAME);
+        assertEquals(2, retryCount);
+    }
+
+    @Test
+    void testGetRetryCountForStep_InvalidStep() {
+        int retryCount = workFlowRegistry.getRetryCountForStep(ENTITY_TYPE, EVENT_TYPE, "InvalidStep");
+        assertEquals(0, retryCount);
+    }
+
+    @Test
+    void testGetBackOffRetry_Enabled() {
+        int backOffRetry = workFlowRegistry.getBackOffRetry(ENTITY_TYPE, EVENT_TYPE, STEP_NAME, 1);
+        assertEquals(3, backOffRetry);
+    }
+
+    @Test
+    void testGetBackOffRetry_Disabled() {
+        stepConfig.getBackOffRetry().setEnabled(false);
+        int backOffRetry = workFlowRegistry.getBackOffRetry(ENTITY_TYPE, EVENT_TYPE, STEP_NAME, 1);
+        assertEquals(0, backOffRetry);
+    }
+}
