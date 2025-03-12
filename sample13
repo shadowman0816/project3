@@ -283,3 +283,72 @@ class FetchPayrollDetailsStepTest {
         verify(payrollService, times(1)).getSinglePayroll(anyString(), anyString());
     }
 }
+package net.jpmchase.payroll.processor.steps.payroll;
+
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+@ExtendWith(MockitoExtension.class)
+class SameVsFutDatePayrollStepTest {
+
+    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+
+    @InjectMocks
+    private SameVsFutDatePayrollStep sameVsFutDatePayrollStep;
+
+    private WorkflowContext context;
+
+    @BeforeEach
+    void setUp() {
+        context = new WorkflowContext();
+    }
+
+    @Test
+    void testExecute_SameDayPayroll() {
+        String today = LocalDate.now().format(DATE_FORMAT);
+        context.put("payrollDate", today);
+
+        sameVsFutDatePayrollStep.execute(context);
+
+        assertEquals("PROCESS_PAYROLL", context.get("routing", String.class));
+    }
+
+    @Test
+    void testExecute_FutureDatedPayroll() {
+        String futureDate = LocalDate.now().plusDays(5).format(DATE_FORMAT);
+        context.put("payrollDate", futureDate);
+
+        sameVsFutDatePayrollStep.execute(context);
+
+        assertEquals("SCHEDULE_PAYROLL", context.get("routing", String.class));
+    }
+
+    @Test
+    void testExecute_BackdatedPayroll() {
+        String pastDate = LocalDate.now().minusDays(3).format(DATE_FORMAT);
+        context.put("payrollDate", pastDate);
+
+        sameVsFutDatePayrollStep.execute(context);
+
+        assertEquals("IGNORE", context.get("routing", String.class));
+    }
+
+    @Test
+    void testExecute_MissingPayrollDate() {
+        Exception exception = assertThrows(NullPointerException.class, () -> {
+            sameVsFutDatePayrollStep.execute(context);
+        });
+
+        assertTrue(exception.getMessage().contains("payrollDate"));
+    }
+}
+
