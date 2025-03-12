@@ -550,5 +550,95 @@ public class EventProcessorServiceTest {
     }
 }
 
+package net.jpmchase.payroll.processor.service;
+
+import net.jpmchase.payroll.processor.model.payroll.Payroll;
+import net.jpmchase.payroll.processor.remote.gusto.CIBGustoWebProxyClient;
+import net.jpmchase.payroll.processor.common.ResponseMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.client.RestClientException;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class GustoPayrollServiceTest {
+
+    @Mock
+    private CIBGustoWebProxyClient cibGustoWebProxyClient;
+
+    @Mock
+    private ResponseMapper responseMapper;
+
+    @InjectMocks
+    private GustoPayrollService gustoPayrollService;
+
+    private static final String COMPANY_ID = "12345";
+    private static final String PAYROLL_UUID = "abcde";
+    private static final String URI_TEMPLATE = "/smbavs-payroll/gusto/connect/v1/companies/{company_id}/payrolls";
+    private static final String EXPECTED_URI = URI_TEMPLATE.replace("{company_id}", COMPANY_ID) + "/" + PAYROLL_UUID;
+
+    private Payroll mockPayroll;
+
+    @BeforeEach
+    void setUp() {
+        mockPayroll = new Payroll();
+        mockPayroll.setPayrollId(PAYROLL_UUID);
+    }
+
+    @Test
+    void testGetSinglePayroll_Success() {
+        when(cibGustoWebProxyClient.get(EXPECTED_URI, Payroll.class)).thenReturn(mockPayroll);
+
+        Payroll result = gustoPayrollService.getSinglePayroll(COMPANY_ID, PAYROLL_UUID);
+
+        assertNotNull(result);
+        assertEquals(PAYROLL_UUID, result.getPayrollId());
+        verify(cibGustoWebProxyClient, times(1)).get(EXPECTED_URI, Payroll.class);
+    }
+
+    @Test
+    void testGetSinglePayroll_Failure_ThrowsException() {
+        when(cibGustoWebProxyClient.get(EXPECTED_URI, Payroll.class))
+                .thenThrow(new RestClientException("Service Unavailable"));
+
+        Exception exception = assertThrows(RestClientException.class, () -> 
+                gustoPayrollService.getSinglePayroll(COMPANY_ID, PAYROLL_UUID));
+
+        assertEquals("Service Unavailable", exception.getMessage());
+        verify(cibGustoWebProxyClient, times(1)).get(EXPECTED_URI, Payroll.class);
+    }
+
+    @Test
+    void testGetSinglePayroll_NullResponse() {
+        when(cibGustoWebProxyClient.get(EXPECTED_URI, Payroll.class)).thenReturn(null);
+
+        Payroll result = gustoPayrollService.getSinglePayroll(COMPANY_ID, PAYROLL_UUID);
+
+        assertNull(result);
+        verify(cibGustoWebProxyClient, times(1)).get(EXPECTED_URI, Payroll.class);
+    }
+
+    @Test
+    void testGetSinglePayroll_InvalidCompanyId() {
+        Exception exception = assertThrows(IllegalArgumentException.class, () -> 
+                gustoPayrollService.getSinglePayroll(null, PAYROLL_UUID));
+
+        assertEquals("Company ID cannot be null or empty", exception.getMessage());
+    }
+
+    @Test
+    void testGetSinglePayroll_InvalidPayrollId() {
+        Exception exception = assertThrows(IllegalArgumentException.class, () -> 
+                gustoPayrollService.getSinglePayroll(COMPANY_ID, null));
+
+        assertEquals("Payroll UUID cannot be null or empty", exception.getMessage());
+    }
+}
 
 
