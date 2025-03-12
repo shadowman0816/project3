@@ -613,4 +613,40 @@ public class EventProcessorService {
         return "always".equalsIgnoreCase(condition) || (event.getRouting() != null && condition.contains(event.getRouting()));
     }
 }
+private boolean evaluateCondition(StepConfig stepConfig, Map<String, Object> context) {
+    // If the condition is 'always', return true immediately
+    if ("always".equalsIgnoreCase(stepConfig.getCondition())) {
+        return true;
+    }
+
+    // If the conditions map exists, check for AND/OR logic
+    if (stepConfig.getConditions() != null) {
+        Map<String, List<String>> conditions = stepConfig.getConditions();
+
+        if (conditions.containsKey("and")) {
+            // All conditions must be true
+            return conditions.get("and").stream().allMatch(condition -> evaluateSingleCondition(condition, context));
+        } else if (conditions.containsKey("or")) {
+            // At least one condition must be true
+            return conditions.get("or").stream().anyMatch(condition -> evaluateSingleCondition(condition, context));
+        }
+    }
+
+    // If no conditions are specified, return false by default
+    return false;
+}
+
+private boolean evaluateSingleCondition(String condition, Map<String, Object> context) {
+    try {
+        String[] parts = condition.split("==");
+        if (parts.length == 2) {
+            String key = parts[0].trim();
+            String expectedValue = parts[1].trim().replace("'", "");
+            return context.containsKey(key) && expectedValue.equals(context.get(key).toString());
+        }
+    } catch (Exception e) {
+        log.error("Error evaluating condition: {}", condition, e);
+    }
+    return false;
+}
 
