@@ -640,5 +640,52 @@ class GustoPayrollServiceTest {
         assertEquals("Payroll UUID cannot be null or empty", exception.getMessage());
     }
 }
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
 
+class EventProcessorServiceTest {
+
+    @Mock
+    private Event event;
+
+    @Mock
+    private StepConfig stepConfig;
+
+    @Mock
+    private Step step;
+
+    @Mock
+    private WorkFlowRegistry workFlowRegistry;
+
+    @InjectMocks
+    private EventProcessorService eventProcessorService;
+
+    private WorkflowContext context;
+
+    @BeforeEach
+    void setup() {
+        MockitoAnnotations.openMocks(this);
+        context = new WorkflowContext();
+
+        // Use lenient to avoid UnnecessaryStubbingException
+        lenient().when(event.getEntityType()).thenReturn("Payroll");
+        lenient().when(event.getEventType()).thenReturn("payroll.submitted");
+
+        lenient().when(workFlowRegistry.getStepsForEvent(anyString(), anyString()))
+                 .thenReturn(List.of(stepConfig));
+        lenient().when(stepConfig.getName()).thenReturn("fetchPayrollDetails");
+        lenient().when(stepConfig.getImmediateRetryCount()).thenReturn(2);
+    }
+
+    @Test
+    void testProcessEvent_Success() {
+        eventProcessorService.processEvent(event);
+        assertEquals("completed", context.getStatus());
+    }
+}
 
