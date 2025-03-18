@@ -1,0 +1,131 @@
+// Updated StepConfig.java
+@Getter
+@Setter
+public class StepConfig {
+    private String name;
+    private boolean disableRetry;
+    private boolean cancellable;
+    private int immediateRetryCount;
+    private BackOffRetry backOffRetry;
+    private Map<String, Object> whenToExecute; // Supports "always", "conditionsAnd", "conditionsOr"
+    private List<StepConfig> subSteps;
+
+    @Getter
+    @Setter
+    public static class BackOffRetry {
+        private boolean enabled;
+        private int maxBackOffHours;
+        private String cutoffTime;
+    }
+}
+
+// Updated WorkflowRegistry.java
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class WorkFlowRegistry {
+    private final WorkFlowConfig workFlowConfig;
+
+    public List<StepConfig> getStepsForEvent(String entityType, String eventType) {
+        return workFlowConfig.getGroups()
+                .getOrDefault(entityType, new HashMap<>())
+                .getOrDefault(eventType, List.of());
+    }
+
+    public StepConfig getStepConfig(String entityType, String eventType, String step) {
+        return getStepsForEvent(entityType, eventType).stream()
+                .filter(s -> s.getName().equals(step))
+                .findFirst().orElse(null);
+    }
+}
+
+// Updated EventProcessorService.java
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class EventProcessorService {
+    private final WorkFlowRegistry workFlowRegistry;
+    private final Map<String, Step> stepRegistry;
+
+    public void processEvent(Event event) {
+        List<StepConfig> steps = workFlowRegistry.getStepsForEvent(event.getEntityType(), event.getEventType());
+        if (steps.isEmpty()) {
+            log.warn("No workflow for event {}", event.getEventType());
+            return;
+        }
+        WorkflowContext context = new WorkflowContext();
+        context.put("event", event);
+        for (StepConfig step : steps) {
+            executeStepWithRetry(step, context, 0);
+            if (step.getSubSteps() != null && !step.getSubSteps().isEmpty()) {
+                processSubSteps(event, step.getSubSteps(), context, 0);
+            }
+            if (context.getStatus().equals("FAILED")) break;
+        }
+    }
+
+    private void processSubSteps(Event event, List<StepConfig> subSteps, WorkflowContext context, int retryCount) {
+        for (StepConfig subStep : subSteps) {
+            executeStepWithRetry(subStep, context, retryCount);
+        }
+    }
+
+    private void executeStepWithRetry(StepConfig stepConfig, WorkflowContext context, int retryCount) {
+        if (!evaluateWhenToExecute(stepConfig, context)) {
+            log.info("Skipping step {} due to conditions", stepConfig.getName());
+            return;
+        }
+        Step stepExecutor = stepRegistry.get(stepConfig.getName());
+        if (stepExecutor == null) {
+            log.warn("Step {} not found in registry", stepConfig.getName());
+            return;
+        }
+        try {
+            stepExecutor.execute(context);
+            log.info("Step {} executed successfully", stepConfig.getName());
+        } catch (Exception e) {
+            log.error("Step {} failed, retrying...", stepConfig.getName(), e);
+            retryCount++;
+            if (retryCount < stepConfig.getImmediateRetryCount()) {
+                executeStepWithRetry(stepConfig, context, retryCount);
+            } else {
+                context.setStatus("FAILED");
+            }
+        }
+    }
+
+    private boolean evaluateWhenToExecute(StepConfig stepConfig, WorkflowContext context) {
+        Map<String, Object> whenToExecute = stepConfig.getWhenToExecute();
+        if (whenToExecute == null) return true;
+
+        if (Boolean.TRUE.equals(whenToExecute.get("always"))) {
+            return true;
+        }
+
+        if (whenToExecute.containsKey("conditionsAnd")) {
+            List<String> conditions = (List<String>) whenToExecute.get("conditionsAnd");
+            return conditions.stream().allMatch(condition -> evaluateSingleCondition(condition, context));
+        }
+
+        if (whenToExecute.containsKey("conditionsOr")) {
+            List<String> conditions = (List<String>) whenToExecute.get("conditionsOr");
+            return conditions.stream().anyMatch(condition -> evaluateSingleCondition(condition, context));
+        }
+
+        return false;
+    }
+
+    private boolean evaluateSingleCondition(String condition, WorkflowContext context) {
+        try {
+            String[] parts = condition.split("==");
+            if (parts.length == 2) {
+                String key = parts[0].trim();
+                String expectedValue = parts[1].trim().replace("'", "");
+                return expectedValue.equals(String.valueOf(context.get(key)));
+            }
+        } catch (Exception e) {
+            log.error("Error evaluating condition: {}", condition, e);
+        }
+        return false;
+    }
+}
