@@ -129,3 +129,37 @@ public class EventProcessorService {
         return false;
     }
 }
+
+private boolean shouldExecute(StepConfig stepConfig, WorkflowContext context) {
+    String condition = stepConfig.getExecuteOnCondition();
+    if (condition == null || condition.equalsIgnoreCase("always")) return true;
+
+    try {
+        // Support 'AND' & 'OR' in the same condition
+        if (condition.contains(" AND ")) {
+            String[] andConditions = condition.split(" AND ");
+            return Arrays.stream(andConditions).allMatch(singleCond -> evaluateSingleCondition(singleCond.trim(), context));
+        } else if (condition.contains(" OR ")) {
+            String[] orConditions = condition.split(" OR ");
+            return Arrays.stream(orConditions).anyMatch(singleCond -> evaluateSingleCondition(singleCond.trim(), context));
+        } else {
+            // Fallback to single condition
+            return evaluateSingleCondition(condition.trim(), context);
+        }
+    } catch (Exception e) {
+        log.error("Failed to evaluate condition '{}'. Error: {}", condition, e.getMessage());
+    }
+    return false;
+}
+
+private boolean evaluateSingleCondition(String condition, WorkflowContext context) {
+    if (condition.contains("==")) {
+        String[] parts = condition.split("==");
+        String key = parts[0].trim();
+        String expectedValue = parts[1].trim().replace("'", "");
+        Object actualValue = context.get(key);
+        return expectedValue.equals(String.valueOf(actualValue));
+    }
+    return false;
+}
+
