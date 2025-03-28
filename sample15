@@ -48,6 +48,10 @@ I’m happy to collaborate on a small spike or draft a proposal around this if i
 Also just a gentle note: it’d be great if we can all keep the tone collaborative in these discussions. I know things move fast, and we all feel strongly about stability—but I truly believe we’ll get the best results when we bring all perspectives to the table and question things together.
 
 ⸻
+BeanUtils.populate(entity, result); // Apache Commons BeanUtils
+ModelMapper modelMapper = new ModelMapper();
+YourEntity entity = modelMapper.map(result, YourEntity.class);
+
 
 Let me know if you’d like this message trimmed down or rephrased to match your tone better.
 
