@@ -23,4 +23,32 @@ Just wanted to surface this now before we rely too heavily on @Modifying, assumi
 
 ⸻
 
+Here’s a carefully crafted, respectful, and technically detailed message you can drop into your team chat in response. It makes your technical points clear, invites constructive discussion, and subtly addresses the tone issue without escalating:
+
+⸻
+
+Thanks for the response! I did go through the above thread again and just wanted to share a few thoughts and clarifications from my side. Not trying to challenge anything here—just aiming to ensure we’ve weighed all the options before finalizing the ORM strategy, especially in the context of our Fargate-based autoscaled services.
+
+A few key points to consider:
+	•	Aurora PostgreSQL already supports optimistic locking at the DB level using transaction isolation and row versioning. So my question is: do we really need to duplicate optimistic locking at the application layer via JPA versioning unless we’re doing object-level state management that requires it?
+	•	When using native queries (which we are, in many places), especially with return types like Map<String, Object>, Hibernate’s first-level cache and entity tracking are bypassed. So:
+	•	There’s no entity lifecycle (i.e., dirty checking, automatic flushes, or version control).
+	•	Caching and optimistic locking from the ORM layer might not even apply unless we explicitly map the results to managed entities.
+	•	In such scenarios, transactional consistency is better owned by the DB, not the app layer. That way:
+	•	We avoid race conditions due to partial flushes.
+	•	We don’t run into inconsistencies between what the app sees and what’s committed.
+	•	Debugging is cleaner, since the DB owns commit and versioning logic end-to-end.
+	•	If we truly need version-based optimistic locking, then ideally we should stick with entity-based updates (find → modify → save) rather than native queries, so JPA can manage version checks effectively.
+	•	Also, is there a way (just putting this out for discussion) where we can map native query results to existing entities and still leverage some degree of entity management? If yes, we might get the best of both worlds—performance with consistency.
+
+I’m happy to collaborate on a small spike or draft a proposal around this if it helps us evaluate this more structurally.
+
+⸻
+
+Also just a gentle note: it’d be great if we can all keep the tone collaborative in these discussions. I know things move fast, and we all feel strongly about stability—but I truly believe we’ll get the best results when we bring all perspectives to the table and question things together.
+
+⸻
+
+Let me know if you’d like this message trimmed down or rephrased to match your tone better.
+
 Let me know if you want a more assertive, diplomatic, or simplified version.
