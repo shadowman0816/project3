@@ -1,0 +1,126 @@
+Perfect! You’re in a great position to formalize this design with a structured document. Based on your notes and the image content (which includes retry-related fields and example payloads), here’s how we can proceed:
+
+⸻
+
+Your Goal
+
+Create a document that:
+	1.	Describes the end-to-end event flow.
+	2.	Defines three types of payloads:
+	•	From Event Manager → Event Processor
+	•	From Event Processor Receiver → Event Processor (on Success from SBP via Kafka)
+	•	From Event Processor Receiver → Event Processor (on FailureRetry, from Retry Outbox)
+
+⸻
+
+Step-by-Step Structure for the Document
+
+1. Overview of Event Flow
+	•	Webhook from CIB to Event Manager
+	•	Event Manager publishes to SQS → Event Processor
+	•	Event Processor makes an API call to PIM
+	•	PIM interacts with SBP
+	•	SBP sends success/failure events to Kafka
+	•	Event Processor Receiver listens on Kafka
+	•	On Success: sends event to Event Processor
+	•	On Failure: stores in retry_outbox
+	•	Scheduled job in Event Receiver reads retry_outbox and re-publishes to Event Processor
+
+⸻
+
+2. Payload: Event Manager → Event Processor
+{
+  "eventId": "uuid-123",
+  "timestamp": 1673976552,
+  "eventType": "payroll.process",
+  "entityType": "Payroll",
+  "entityId": "2447e450-d3b3-4118-8e17-72d1c470351c",
+  "resourceType": "PAYROLL",
+  "source": "EventManager"
+}
+
+Notes:
+	•	eventType can be like payroll.process, payee.create, etc.
+	•	resourceType defines the domain object
+	•	source tracks origin of event
+
+⸻
+
+3. Payload: Event Processor Receiver → Event Processor (Kafka Success)
+{
+  "eventId": "uuid-456",
+  "timestamp": 1673976552,
+  "eventType": "provider.response",
+  "entityType": "Payroll",
+  "entityId": "2447e450-d3b3-4118-8e17-72d1c470351c",
+  "responseType": "SafePay/PASS/SMBACH",
+  "stepName": "SBPProviderResponse",
+  "source": "Kafka",
+  "payload": {
+    "entireObject": { /* full provider response from SBP */ }
+  }
+}
+
+
+
+⸻
+
+4. Payload: Event Processor Receiver → Event Processor (Failure Retry)
+{
+  "eventId": "uuid-789",
+  "timestamp": 1673976552,
+  "eventType": "Retry/Monitor",
+  "entityType": "Payroll",
+  "entityId": "2447e450-d3b3-4118-8e17-72d1c470351c",
+  "retry": {
+    "retryCount": 2,
+    "retryStatus": "Failure",
+    "retryReason": "Timeout from PIM",
+    "retryStepName": "SafePayAuthorization",
+    "retryJourney": "PayrollRun"
+  },
+  "source": "RetryOutbox"
+}
+
+{
+  "eventId": "uuid-789",
+  "timestamp": 1673976552,
+  "eventType": "Retry/Monitor",
+  "entityType": "Payroll",
+  "entityId": "2447e450-d3b3-4118-8e17-72d1c470351c",
+  "retry": {
+    "retryCount": 2,
+    "retryStatus": "Failure",
+    "retryReason": "Timeout from PIM",
+    "retryStepName": "SafePayAuthorization",
+    "retryJourney": "PayrollRun"
+  },
+  "source": "RetryOutbox"
+}
+Additional Info Pulled from pyrl_retry_outbox table:
+	•	src_pyrl_id, src_event_id, retry_step_nm, etc. from the table you posted.
+
+⸻
+
+5. Retry Outbox Table Reference (from image)
+
+Your table fields:
+src_pyrl_id
+src_event_id
+pyrl_txn_id
+pyrl_payee_txn_id
+src_payee_id
+src_company_id
+retry_journey
+retry_step_nm
+retry_count
+retry_status
+retry_status_reason
+retry_expiry_ts
+retry_entity_type
+retry_type
+retry_initiation_ts
+created_usr_id
+created_ts
+updated_usr_id
+updated_ts
