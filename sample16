@@ -124,3 +124,81 @@ created_usr_id
 created_ts
 updated_usr_id
 updated_ts
+
+@ExtendWith(MockitoExtension.class)
+public class EventLogAspectTest {
+
+    @Mock
+    private EventLogRepository eventLogRepository;
+
+    @InjectMocks
+    private EventLogAspect eventLogAspect;
+    
+    @Mock
+    private JoinPoint joinPoint;
+
+    @Mock
+    private ProceedingJoinPoint proceedingJoinPoint;
+
+    @Mock
+    private Event event;
+    
+    @Mock
+    private EventLogEntity eventLogEntity;
+
+    // Tests go here...
+}
+@Test
+void testUpdateEventLog_whenLogExists_shouldUpdate() {
+    String method = "testMethod";
+    String status = "IN_PROCESS";
+    String failureReason = null;
+
+    when(event.getEventUuid()).thenReturn(UUID.randomUUID());
+    when(eventLogRepository.findBySrcEvtId(anyString())).thenReturn(eventLogEntity);
+
+    eventLogAspect.updateEventLog(event, method, status, failureReason);
+
+    verify(eventLogRepository).updateStatusById(
+        eq(eventLogEntity),
+        eq(event.getEventUuid().toString()),
+        eq(status),
+        eq(failureReason),
+        eq("EVENT_UPDATED_USERID") // You can refactor this to a constant if needed
+    );
+}
+@Test
+void testUpdateEventLog_whenLogNotFound_shouldLogError() {
+    when(event.getEventUuid()).thenReturn(UUID.randomUUID());
+    when(eventLogRepository.findBySrcEvtId(anyString())).thenReturn(null);
+
+    eventLogAspect.updateEventLog(event, "method", "status", "reason");
+
+    verify(eventLogRepository, never()).updateStatusById(any(), any(), any(), any(), any());
+}
+
+@Test
+void testTrackStepExecution_successfulFlow() throws Throwable {
+    when(proceedingJoinPoint.getSignature().getName()).thenReturn("testMethod");
+    when(proceedingJoinPoint.getArgs()).thenReturn(new Object[]{event});
+    when(proceedingJoinPoint.proceed()).thenReturn("Success");
+
+    Object result = eventLogAspect.trackStepExecution(proceedingJoinPoint);
+
+    assertEquals("Success", result);
+}
+@Test
+void testTrackStepExecution_throwsException_shouldLogFailure() throws Throwable {
+    when(proceedingJoinPoint.getSignature().getName()).thenReturn("testMethod");
+    when(proceedingJoinPoint.getArgs()).thenReturn(new Object[]{event});
+    when(proceedingJoinPoint.proceed()).thenThrow(new RuntimeException("Failure"));
+
+    assertThrows(RuntimeException.class, () -> {
+        eventLogAspect.trackStepExecution(proceedingJoinPoint);
+    });
+
+    // Verify updateEventLog was called with "PROCESSING_FAILED"
+    // You may want to spy the aspect to verify this
+}
+
+
