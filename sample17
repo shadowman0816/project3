@@ -191,4 +191,28 @@ class EventProcessorServiceTest {
         service.processEvent(testEvent);
         verify(stepExecutor, times(1)).execute(any()); // should break early
     }
+
+
+Here’s a polished version of your update email to the team:
+
+⸻
+
+Subject: Latest Update: Processor Framework Changes & Onboarding Step
+
+Hi Team,
+
+This is a follow-up to my earlier update this morning.
+
+The framework changes on the Payroll Event Processor have now been reviewed and are conditionally approved for now.
+Please take the latest code for the framework changes on the processor from the shared branch/repo.
+
+I’m currently working on implementing the onboarding status check step. If you need this step as part of your workflow—particularly for employee/contractor update webhook events received from Gusto—please hold off for my response. I’ll share the finalized implementation and the related JIRA ticket shortly so you can plug it in easily.
+
+Thanks,
+Kasi
+
+⸻
+
+Let me know if you’d like to include the JIRA ticket link or commit SHA, and I can insert it for you.
+
 }
