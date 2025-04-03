@@ -1,0 +1,53 @@
+- name: PublishToSBPPayee
+  executeOnCondition: always
+  conditionBean: payrollInProgressCondition
+
+
+@Component("payrollInProgressCondition")
+public class PayrollInProgressCondition implements ExecutionCondition {
+    @Override
+    public boolean evaluate(WorkflowContext context) {
+        return "FALSE".equalsIgnoreCase(String.valueOf(context.get("payrollInProgress")));
+    }
+}
+
+@Autowired
+private ConditionRegistry conditionRegistry;
+
+String conditionBean = stepConfig.getConditionBean();
+if (conditionBean != null && !conditionBean.isBlank()) {
+    ExecutionCondition condition = conditionRegistry.get(conditionBean);
+    if (condition == null || !condition.evaluate(context)) {
+        log.info("[PROCESSOR] Skipping step '{}' due to condition '{}'", stepConfig.getName(), conditionBean);
+        return;
+    }
+} else if (!shouldExecute(stepConfig, context)) {
+    log.info("[PROCESSOR] Skipping step '{}' due to fallback condition", stepConfig.getName());
+    return;
+}
+@Component
+public class ConditionRegistry {
+
+    private final Map<String, ExecutionCondition> conditionMap;
+
+    @Autowired
+    public ConditionRegistry(List<ExecutionCondition> conditions) {
+        this.conditionMap = conditions.stream()
+            .collect(Collectors.toMap(
+                c -> c.getClass().getAnnotation(Component.class).value(),
+                Function.identity()
+            ));
+    }
+
+    public ExecutionCondition get(String beanName) {
+        return conditionMap.get(beanName);
+    }
+}
+
+public interface ExecutionCondition {
+    boolean evaluate(WorkflowContext context);
+}
+private String conditionBean; // optional Spring bean name for condition
+
+
+
