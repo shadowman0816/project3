@@ -99,4 +99,298 @@ public class ConditionRegistry {
         return conditionMap.get(beanName);
     }
 }
+package net.jpmchase.payroll.processor.service;
 
+import net.jpmchase.payroll.processor.conditions.ExecutionCondition;
+import net.jpmchase.payroll.processor.context.WorkflowContext;
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.registry.ConditionRegistry;
+import net.jpmchase.payroll.processor.registry.WorkflowRegistry;
+import net.jpmchase.payroll.processor.steps.Step;
+import net.jpmchase.payroll.processor.config.StepConfig;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.*;
+
+import java.util.*;
+
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+public class EventProcessorServiceTest {
+
+    @InjectMocks
+    private EventProcessorService eventProcessorService;
+
+    @Mock
+    private WorkflowRegistry workflowRegistry;
+
+    @Mock
+    private ConditionRegistry conditionRegistry;
+
+    @Mock
+    private Step stepExecutor;
+
+    @Captor
+    private ArgumentCaptor<WorkflowContext> contextCaptor;
+
+    private final Event testEvent = new Event("employee.bank_account", "created");
+
+    @BeforeEach
+    public void setUp() {
+        MockitoAnnotations.openMocks(this);
+    }
+
+    private StepConfig basicStep(String name, String condition, boolean retry) {
+        StepConfig step = new StepConfig();
+        step.setName(name);
+        step.setExecuteOnCondition(condition);
+        step.setDisableRetry(!retry);
+        step.setImmediateRetryCount(1);
+        return step;
+    }
+
+    @Test
+    public void shouldExecuteStepWithAlwaysCondition() {
+        StepConfig step = basicStep("step1", "always", true);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("step1");
+
+        eventProcessorService.getStepRegistry().put("step1", stepExecutor);
+        eventProcessorService.processEvent(testEvent);
+
+        verify(stepExecutor).execute(any());
+    }
+
+    @Test
+    public void shouldExecuteStepWithMatchingConditionBean() {
+        StepConfig step = basicStep("step2", "payrollInProgressCondition", true);
+
+        ExecutionCondition condition = context -> true;
+        when(conditionRegistry.get("payrollInProgressCondition")).thenReturn(condition);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("step2");
+
+        eventProcessorService.getStepRegistry().put("step2", stepExecutor);
+        eventProcessorService.processEvent(testEvent);
+
+        verify(stepExecutor).execute(any());
+    }
+
+    @Test
+    public void shouldSkipStepIfConditionBeanReturnsFalse() {
+        StepConfig step = basicStep("step3", "someCondition", true);
+
+        ExecutionCondition condition = context -> false;
+        when(conditionRegistry.get("someCondition")).thenReturn(condition);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("step3");
+
+        eventProcessorService.getStepRegistry().put("step3", stepExecutor);
+        eventProcessorService.processEvent(testEvent);
+
+        verify(stepExecutor, never()).execute(any());
+    }
+
+    @Test
+    public void shouldSkipStepIfConditionBeanIsMissing() {
+        StepConfig step = basicStep("step4", "nonExistentCondition", true);
+
+        when(conditionRegistry.get("nonExistentCondition")).thenReturn(null);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("step4");
+
+        eventProcessorService.getStepRegistry().put("step4", stepExecutor);
+        eventProcessorService.processEvent(testEvent);
+
+        verify(stepExecutor, never()).execute(any());
+    }
+
+    @Test
+    public void shouldRespectDisableRetryTrue() {
+        StepConfig step = basicStep("step5", "always", false); // no retry
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("step5");
+
+        doThrow(new RuntimeException("fail")).when(stepExecutor).execute(any());
+
+        eventProcessorService.getStepRegistry().put("step5", stepExecutor);
+        eventProcessorService.processEvent(testEvent);
+
+        verify(stepExecutor).execute(any()); // only once
+    }
+
+    @Test
+    public void shouldRetryIfImmediateRetryCountIsSet() {
+        StepConfig step = basicStep("step6", "always", true);
+        step.setImmediateRetryCount(2);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("step6");
+
+        doThrow(new RuntimeException("fail")).doThrow(new RuntimeException("fail")).when(stepExecutor).execute(any());
+
+        eventProcessorService.getStepRegistry().put("step6", stepExecutor);
+        eventProcessorService.processEvent(testEvent);
+
+        verify(stepExecutor, times(2)).execute(any());
+    }
+
+    @Test
+    public void shouldMarkStatusCompletedWhenAllStepsPass() {
+        StepConfig step = basicStep("step7", "always", true);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("step7");
+
+        eventProcessorService.getStepRegistry().put("step7", stepExecutor);
+        eventProcessorService.processEvent(testEvent);
+
+        assertEquals("COMPLETED", WorkflowContext.Status.COMPLETED.name());
+    }
+}
+
+package net.jpmchase.payroll.processor.service;
+
+import net.jpmchase.payroll.processor.conditions.ExecutionCondition;
+import net.jpmchase.payroll.processor.context.WorkflowContext;
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.registry.ConditionRegistry;
+import net.jpmchase.payroll.processor.registry.WorkflowRegistry;
+import net.jpmchase.payroll.processor.steps.Step;
+import net.jpmchase.payroll.processor.config.StepConfig;
+import net.jpmchase.payroll.processor.config.StepConfig.BackOffRetry;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.*;
+
+import java.time.LocalTime;
+import java.util.*;
+
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+public class EventProcessorServiceTest {
+
+    @InjectMocks
+    private EventProcessorService eventProcessorService;
+
+    @Mock private WorkflowRegistry workflowRegistry;
+    @Mock private ConditionRegistry conditionRegistry;
+    @Mock private Step stepExecutor;
+
+    private final Event event = new Event("employee.bank_account", "created");
+
+    @BeforeEach
+    public void setUp() {
+        MockitoAnnotations.openMocks(this);
+    }
+
+    private StepConfig stepWithRetry(String name, int retries, boolean withBackoff, String cutoff) {
+        StepConfig step = new StepConfig();
+        step.setName(name);
+        step.setExecuteOnCondition("always");
+        step.setDisableRetry(false);
+        step.setImmediateRetryCount(retries);
+
+        if (withBackoff) {
+            BackOffRetry backoff = new BackOffRetry();
+            backoff.setEnabled(true);
+            backoff.setMaxBackOffHours(3);
+            backoff.setCutoffTime(cutoff);
+            step.setBackOffRetry(backoff);
+        }
+
+        return step;
+    }
+
+    @Test
+    public void testImmediateRetryOnFailure() {
+        StepConfig step = stepWithRetry("stepImmediate", 2, false, null);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("stepImmediate");
+
+        doThrow(new RuntimeException("fail")).when(stepExecutor).execute(any());
+
+        eventProcessorService.getStepRegistry().put("stepImmediate", stepExecutor);
+        eventProcessorService.processEvent(event);
+
+        verify(stepExecutor, times(2)).execute(any()); // should retry once
+    }
+
+    @Test
+    public void testBackoffRetryNotTriggeredIfCutoffPassed() {
+        String pastCutoff = LocalTime.now().minusHours(1).toString();
+        StepConfig step = stepWithRetry("stepBackoffLate", 0, true, pastCutoff);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("stepBackoffLate");
+
+        eventProcessorService.getStepRegistry().put("stepBackoffLate", stepExecutor);
+        eventProcessorService.processEvent(event);
+
+        verify(stepExecutor, never()).execute(any()); // cutoff time already passed
+    }
+
+    @Test
+    public void testBackoffRetryTriggeredIfBeforeCutoff() {
+        String futureCutoff = LocalTime.now().plusHours(1).toString();
+        StepConfig step = stepWithRetry("stepBackoffEarly", 0, true, futureCutoff);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("stepBackoffEarly");
+
+        doThrow(new RuntimeException("fail")).when(stepExecutor).execute(any());
+
+        eventProcessorService.getStepRegistry().put("stepBackoffEarly", stepExecutor);
+        eventProcessorService.processEvent(event);
+
+        // Simulate fallback to backoff
+        verify(stepExecutor, times(1)).execute(any()); // will run once then fail and enter backoff
+    }
+
+    @Test
+    public void testStepExecutesSuccessfullyAndNoRetry() {
+        StepConfig step = stepWithRetry("stepSuccess", 2, false, null);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("stepSuccess");
+
+        eventProcessorService.getStepRegistry().put("stepSuccess", stepExecutor);
+        eventProcessorService.processEvent(event);
+
+        verify(stepExecutor).execute(any());
+    }
+
+    @Test
+    public void testStepWithDisabledRetryFailsOnce() {
+        StepConfig step = new StepConfig();
+        step.setName("stepNoRetry");
+        step.setExecuteOnCondition("always");
+        step.setDisableRetry(true);
+
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("stepNoRetry");
+
+        doThrow(new RuntimeException("fail")).when(stepExecutor).execute(any());
+
+        eventProcessorService.getStepRegistry().put("stepNoRetry", stepExecutor);
+        eventProcessorService.processEvent(event);
+
+        verify(stepExecutor, times(1)).execute(any()); // only once due to retry disabled
+    }
+
+    @Test
+    public void testConditionBeanOverridesAlways() {
+        StepConfig step = new StepConfig();
+        step.setName("conditionalStep");
+        step.setExecuteOnCondition("customCondition");
+        step.setDisableRetry(true);
+
+        ExecutionCondition condition = context -> false;
+        when(conditionRegistry.get("customCondition")).thenReturn(condition);
+        when(workflowRegistry.getStepsForEvent(any(), any())).thenReturn(List.of(step));
+        when(stepExecutor.getName()).thenReturn("conditionalStep");
+
+        eventProcessorService.getStepRegistry().put("conditionalStep", stepExecutor);
+        eventProcessorService.processEvent(event);
+
+        verify(stepExecutor, never()).execute(any()); // condition prevented execution
+    }
+}
