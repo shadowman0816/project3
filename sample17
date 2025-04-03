@@ -216,3 +216,62 @@ Kasi
 Let me know if you’d like to include the JIRA ticket link or commit SHA, and I can insert it for you.
 
 }
+package net.jpmchase.payroll.processor.steps.onboarding;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.context.WorkflowContext;
+import net.jpmchase.payroll.processor.remote.gusto.GustoOnboardingService;
+import net.jpmchase.payroll.processor.steps.Step;
+import org.springframework.stereotype.Component;
+
+import java.util.UUID;
+
+@Slf4j
+@Component("CheckOnboardingStatus")
+@RequiredArgsConstructor
+public class CheckOnboardingStatusStep implements Step {
+
+    private final GustoOnboardingService onboardingService;
+
+    @Override
+    public void execute(WorkflowContext context) {
+        UUID payeeId = context.get("payeeId", UUID.class);
+        String type = context.get("payeeType", String.class); // "EMPLOYEE" or "CONTRACTOR"
+
+        log.info("[CheckOnboardingStatus] Checking onboarding status for {}: {}", type, payeeId);
+
+        boolean isOnboarded = onboardingService.isOnboardingComplete(type, payeeId);
+        if (!isOnboarded) {
+            throw new IllegalStateException("Onboarding not complete for payee: " + payeeId);
+        }
+
+        log.info("[CheckOnboardingStatus] Onboarding complete for {}: {}", type, payeeId);
+    }
+}
+package net.jpmchase.payroll.processor.remote.gusto;
+
+import lombok.RequiredArgsConstructor;
+import net.jpmchase.payroll.processor.remote.gusto.model.employee.EmployeeOnboardingResponse;
+import net.jpmchase.payroll.processor.remote.gusto.model.contractor.ContractorOnboardingResponse;
+import org.springframework.stereotype.Service;
+
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+public class GustoOnboardingService {
+
+    private final GustoWebProxyClient proxyClient;
+
+    public boolean isOnboardingComplete(String type, UUID payeeId) {
+        if ("EMPLOYEE".equalsIgnoreCase(type)) {
+            EmployeeOnboardingResponse response = proxyClient.getEmployeeOnboardingStatus(payeeId);
+            return "ONBOARDING_COMPLETE".equalsIgnoreCase(response.getOnboardingStatus());
+        } else if ("CONTRACTOR".equalsIgnoreCase(type)) {
+            ContractorOnboardingResponse response = proxyClient.getContractorOnboardingStatus(payeeId);
+            return "ONBOARDING_COMPLETE".equalsIgnoreCase(response.getOnboardingStatus());
+        }
+        return false;
+    }
+}
