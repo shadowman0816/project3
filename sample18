@@ -1,0 +1,39 @@
+Area
+Potential Challenge
+Notes
+API Reliability
+API call to PIM may timeout, retry, or return partial error
+Must handle idempotency, exponential backoff
+Message Ordering
+Event Processor must guarantee instruction order
+Need sequence or step token support
+Resiliency
+PIM or downstream systems may be down
+Must log failed steps to retry queue
+Idempotency
+Duplicate retries could cause re-posting of payments
+Use instructionId or hash in PIM to reject duplicates
+PIM↔SPP Communication
+PIM internally handles SPP/SafePay/PASS routing
+If SPP fails, need error propagation and retries
+Delayed Response
+If PIM is async, we might receive delayed success/failure
+EventReceiver must listen for callbacks via SQS/SNS
+Error Propagation
+Failures in SPP/PASS must bubble up to processor
+Must translate PIM/PQM statuses into actionable workflow steps
+Rollback/Cancel
+How to reverse a sent instruction (esp. after partial success)
+Define cancelable steps and reversal logic in metadata
+Partial Success
+Receiver leg may succeed while sender leg fails
+Treat PIM call as transactional or implement compensating steps
+Testing
+Simulate end-to-end behavior with mocks for SPP/PASS
+Need test harnesses and mock environments
+Monitoring
+Ensure observability for PIM-to-SPP flows
+Use CloudWatch/X-Ray/Splunk for tracing
+Security
+PIM API requires strict auth (IAM, JWT, mTLS)
+Coordinate with security team for credentials/secrets
