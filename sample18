@@ -12,24 +12,36 @@ public class DeterminePayrollInProgressStep implements Step {
         String payrollId = (String) context.get("payrollId");
         String eventId = (String) context.get("eventId");
 
-        payrollRepository.findBySrcPayrollId(payrollId).ifPresentOrElse(payroll -> {
-            if ("IN_PROGRESS".equalsIgnoreCase(payroll.getStatusCode())) {
-                log.info("Payroll is in progress for id: {}", payrollId);
+        if (payrollId == null) {
+            throw new IllegalArgumentException("Missing required context value: payrollId");
+        }
 
-                PayrollEventLog logEntry = new PayrollEventLog();
-                logEntry.setSrcEventId(eventId);
-                logEntry.setEventName("DeterminePayrollInProgress");
-                logEntry.setEventStatus("FAILED");
-                logEntry.setErrorDescription("Payroll already in progress.");
+        if (eventId == null) {
+            log.warn("Missing eventId in context for payrollId: {}", payrollId);
+        }
 
-                eventLogRepository.save(logEntry);
-                context.setStatus("failed");
-            } else {
-                log.info("Payroll not in progress, proceeding.");
-            }
-        }, () -> {
-            throw new RuntimeException("Payroll not found for id: " + payrollId);
-        });
+        Optional<Payroll> payrollOpt = payrollRepository.findBySrcPayrollId(payrollId);
+
+        if (payrollOpt.isEmpty()) {
+            log.info("No payroll found for id: {}. Treating as valid case and skipping.", payrollId);
+            return;
+        }
+
+        Payroll payroll = payrollOpt.get();
+        if ("IN_PROGRESS".equalsIgnoreCase(payroll.getStatusCode())) {
+            log.info("Payroll is in progress for id: {}. Marking event as failed.", payrollId);
+
+            PayrollEventLog logEntry = new PayrollEventLog();
+            logEntry.setSrcEventId(eventId);
+            logEntry.setEventName("DeterminePayrollInProgress");
+            logEntry.setEventStatus("FAILED");
+            logEntry.setErrorDescription("Payroll is currently in progress.");
+            logEntry.setUpdateTimestamp(LocalDateTime.now());
+
+            eventLogRepository.save(logEntry);
+            context.setStatus("failed");
+        } else {
+            log.info("Payroll is not in progress for id: {}. Proceeding with workflow.", payrollId);
+        }
     }
 }
-
