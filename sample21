@@ -1,0 +1,76 @@
+package net.jpmchase.payroll.processor.steps.payee;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.events.model.Event;
+import net.jpmchase.payroll.processor.repository.CompanyEnrollmentRepository;
+import net.jpmchase.payroll.processor.repository.EventLogRepository;
+import net.jpmchase.payroll.processor.steps.Step;
+import net.jpmchase.payroll.processor.entity.CompanyEnrollmentEntity;
+import net.jpmchase.payroll.processor.entity.PayrollEventLog;
+
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.Optional;
+
+@Component("DetermineCompanyEnrollmentStatus")
+@RequiredArgsConstructor
+@Slf4j
+public class CompanyEnrollmentDeterminationStep implements Step {
+
+    private final CompanyEnrollmentRepository companyEnrollmentRepository;
+    private final EventLogRepository eventLogRepository;
+
+    @Override
+    @Transactional
+    public void execute(WorkflowContext context) {
+        Event event = context.get("event", Event.class);
+        String companyId = event.getMessageBody().getReferences().get("company_uuid");
+
+        if (companyId == null) {
+            throw new IllegalArgumentException("Missing required context value: company_uuid");
+        }
+
+        Optional<CompanyEnrollmentEntity> enrollmentOpt = companyEnrollmentRepository.findByCompanyId(companyId);
+
+        if (enrollmentOpt.isEmpty()) {
+            log.warn("No enrollment found for companyId: {}. Skipping.", companyId);
+            return;
+        }
+
+        CompanyEnrollmentEntity enrollment = enrollmentOpt.get();
+        String status = enrollment.getEnrlStatus();
+
+        if (!"COMPLETE".equalsIgnoreCase(status)) {
+            log.info("Company enrollment incomplete for companyId: {}. Marking event as failed.", companyId);
+            PayrollEventLog logEntry = new PayrollEventLog();
+            logEntry.setEventId(event.getEventId());
+            logEntry.setEventName("DetermineCompanyEnrollmentStatus");
+            logEntry.setEventStatus("FAILED");
+            logEntry.setErrorDescription("Company enrollment not complete.");
+            logEntry.setUpdateTimestamp(LocalDateTime.now());
+            eventLogRepository.save(logEntry);
+
+            context.setStatus("FAILED");
+        } else {
+            log.info("Company enrollment complete for companyId: {}. Proceeding.", companyId);
+            context.put("companyEnrolled", true);
+        }
+    }
+}
+
+package net.jpmchase.payroll.processor.repository;
+
+import net.jpmchase.payroll.processor.entity.CompanyEnrollmentEntity;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.Optional;
+
+@Repository
+public interface CompanyEnrollmentRepository extends JpaRepository<CompanyEnrollmentEntity, String> {
+    Optional<CompanyEnrollmentEntity> findByCompanyId(String companyId);
+}
