@@ -127,3 +127,27 @@ class PayrollInProgressDetermineStepTest {
         assertEquals(true, context.get("payrollInProgress"));
     }
 }
+package net.jpmchase.payroll.processor.util;
+
+import net.jpmchase.payroll.processor.model.Event;
+import net.jpmchase.payroll.processor.model.MessageBody;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class TestUtils {
+
+    public static Event mockEventWithReferences(String key, String value) {
+        Event event = new Event();
+        MessageBody body = new MessageBody();
+
+        Map<String, String> references = new HashMap<>();
+        references.put(key, value);
+
+        body.setReferences(references);
+        event.setMessageBody(body);
+
+        return event;
+    }
+}
+
