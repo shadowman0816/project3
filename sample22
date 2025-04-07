@@ -1,0 +1,46 @@
+@Component("DeletePayeeBankAccountStep")
+@RequiredArgsConstructor
+@Slf4j
+public class DeletePayeeBankAccountStep implements Step {
+
+    private final PyrlPayeeAcctRepository acctRepository;
+    private final PyrlPayeeAcctAuditRepository auditRepository;
+
+    @Override
+    @Transactional
+    public void execute(WorkflowContext context) {
+        Event event = context.get("event", Event.class);
+        String payeeId = event.getMessageBody().getReferences().get("payee_id");
+
+        if (payeeId == null) {
+            throw new IllegalArgumentException("Missing payee_id in event context");
+        }
+
+        Optional<PyrlPayeeAcctEntity> acctOpt = acctRepository.findBySrcPayeeId(payeeId);
+        if (acctOpt.isEmpty()) {
+            log.warn("No payee account found for payeeId: {}", payeeId);
+            return;
+        }
+
+        PyrlPayeeAcctEntity acct = acctOpt.get();
+
+        // Move to audit
+        PyrlPayeeAcctAuditEntity audit = new PyrlPayeeAcctAuditEntity();
+        audit.setPyrlPayeeAcctId(acct.getPyrlPayeeAcctId());
+        audit.setSrcPayeeId(acct.getSrcPayeeId());
+        audit.setAcctNumber(acct.getAcctNumber());
+        audit.setAcctStatusCode(acct.getAcctStatusCode());
+        audit.setCreatedTimestamp(LocalDateTime.now());
+        audit.setCreatedUserId("system");
+
+        auditRepository.save(audit);
+
+        // Update active record to 'DELETED'
+        acct.setAcctStatusCode("DELETED");
+        acct.setUpdateTimestamp(LocalDateTime.now());
+        acct.setUpdateUserId("system");
+        acctRepository.save(acct);
+
+        log.info("Bank account deleted for payeeId: {}", payeeId);
+    }
+}
