@@ -44,3 +44,77 @@ public class DeletePayeeBankAccountStep implements Step {
         log.info("Bank account deleted for payeeId: {}", payeeId);
     }
 }
+@ExtendWith(MockitoExtension.class)
+class DeletePayeeBankAccountStepTest {
+
+    @InjectMocks
+    private DeletePayeeBankAccountStep step;
+
+    @Mock
+    private PyrlPayeeAcctRepository acctRepository;
+
+    @Mock
+    private PyrlPayeeAcctAuditRepository auditRepository;
+
+    private WorkflowContext context;
+    private Event event;
+
+    @BeforeEach
+    void setup() {
+        context = new WorkflowContext();
+        event = new Event();
+        MessageBody body = new MessageBody();
+        Map<String, String> references = new HashMap<>();
+        references.put("payee_id", "PAYEE123");
+        body.setReferences(references);
+        event.setMessageBody(body);
+        context.put("event", event);
+    }
+
+    @Test
+    void testDeleteBankAccount_SuccessfulCase() {
+        PyrlPayeeAcctEntity acct = new PyrlPayeeAcctEntity();
+        acct.setPyrlPayeeAcctId("ACCT123");
+        acct.setSrcPayeeId("PAYEE123");
+        acct.setAcctNumber("1234567890");
+        acct.setAcctStatusCode("ACTIVE");
+
+        when(acctRepository.findBySrcPayeeId("PAYEE123")).thenReturn(Optional.of(acct));
+
+        step.execute(context);
+
+        verify(auditRepository).save(any(PyrlPayeeAcctAuditEntity.class));
+        verify(acctRepository).save(argThat(updated -> "DELETED".equals(updated.getAcctStatusCode())));
+    }
+
+    @Test
+    void testDeleteBankAccount_NoPayeeId_ThrowsException() {
+        event.getMessageBody().getReferences().remove("payee_id");
+
+        assertThrows(IllegalArgumentException.class, () -> step.execute(context));
+    }
+
+    @Test
+    void testDeleteBankAccount_NoPayeeAccount_Found() {
+        when(acctRepository.findBySrcPayeeId("PAYEE123")).thenReturn(Optional.empty());
+
+        step.execute(context);
+
+        verify(auditRepository, never()).save(any());
+        verify(acctRepository, never()).save(any());
+    }
+
+    @Test
+    void testDeleteBankAccount_NullReferences_ThrowsException() {
+        event.getMessageBody().setReferences(null);
+
+        assertThrows(NullPointerException.class, () -> step.execute(context));
+    }
+
+    @Test
+    void testDeleteBankAccount_NullMessageBody_ThrowsException() {
+        event.setMessageBody(null);
+
+        assertThrows(NullPointerException.class, () -> step.execute(context));
+    }
+}
