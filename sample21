@@ -74,3 +74,119 @@ import java.util.Optional;
 public interface CompanyEnrollmentRepository extends JpaRepository<CompanyEnrollmentEntity, String> {
     Optional<CompanyEnrollmentEntity> findByCompanyId(String companyId);
 }
+package net.jpmchase.payroll.processor.steps.payee;
+
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.entity.CompanyEnrollmentEntity;
+import net.jpmchase.payroll.processor.entity.PayrollEventLog;
+import net.jpmchase.payroll.processor.events.model.Event;
+import net.jpmchase.payroll.processor.events.model.MessageBody;
+import net.jpmchase.payroll.processor.repository.CompanyEnrollmentRepository;
+import net.jpmchase.payroll.processor.repository.EventLogRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class CompanyEnrollmentDeterminationStepTest {
+
+    private CompanyEnrollmentRepository enrollmentRepository;
+    private EventLogRepository eventLogRepository;
+    private CompanyEnrollmentDeterminationStep step;
+
+    @BeforeEach
+    void setup() {
+        enrollmentRepository = mock(CompanyEnrollmentRepository.class);
+        eventLogRepository = mock(EventLogRepository.class);
+        step = new CompanyEnrollmentDeterminationStep(enrollmentRepository, eventLogRepository);
+    }
+
+    @Test
+    void testExecute_enrollmentComplete() {
+        Event event = createEvent("COMP123");
+        WorkflowContext context = new WorkflowContext();
+        context.put("event", event);
+
+        CompanyEnrollmentEntity entity = new CompanyEnrollmentEntity();
+        entity.setPyrlEnrlId("ENRL123");
+        entity.setEnrlStatus("COMPLETE");
+
+        when(enrollmentRepository.findByCompanyId("COMP123")).thenReturn(Optional.of(entity));
+
+        step.execute(context);
+
+        assertTrue((Boolean) context.get("companyEnrolled"));
+        verify(eventLogRepository, never()).save(any());
+    }
+
+    @Test
+    void testExecute_enrollmentNotComplete_logsFailure() {
+        Event event = createEvent("COMP999");
+        WorkflowContext context = new WorkflowContext();
+        context.put("event", event);
+
+        CompanyEnrollmentEntity entity = new CompanyEnrollmentEntity();
+        entity.setPyrlEnrlId("ENRL999");
+        entity.setEnrlStatus("IN_PROGRESS");
+
+        when(enrollmentRepository.findByCompanyId("COMP999")).thenReturn(Optional.of(entity));
+
+        step.execute(context);
+
+        assertEquals("FAILED", context.getStatus());
+
+        ArgumentCaptor<PayrollEventLog> captor = ArgumentCaptor.forClass(PayrollEventLog.class);
+        verify(eventLogRepository).save(captor.capture());
+
+        PayrollEventLog savedLog = captor.getValue();
+        assertEquals("DetermineCompanyEnrollmentStatus", savedLog.getEventName());
+        assertEquals("FAILED", savedLog.getEventStatus());
+        assertEquals("Company enrollment not complete.", savedLog.getErrorDescription());
+        assertNotNull(savedLog.getUpdateTimestamp());
+    }
+
+    @Test
+    void testExecute_enrollmentNotFound_skips() {
+        Event event = createEvent("COMP404");
+        WorkflowContext context = new WorkflowContext();
+        context.put("event", event);
+
+        when(enrollmentRepository.findByCompanyId("COMP404")).thenReturn(Optional.empty());
+
+        step.execute(context);
+
+        assertNull(context.get("companyEnrolled"));
+        verify(eventLogRepository, never()).save(any());
+    }
+
+    @Test
+    void testExecute_nullCompanyId_throwsException() {
+        Event event = new Event();
+        MessageBody body = new MessageBody();
+        body.setReferences(Map.of()); // no company_uuid
+        event.setMessageBody(body);
+
+        WorkflowContext context = new WorkflowContext();
+        context.put("event", event);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> step.execute(context));
+        assertEquals("Missing required context value: company_uuid", exception.getMessage());
+
+        verifyNoInteractions(enrollmentRepository, eventLogRepository);
+    }
+
+    private Event createEvent(String companyId) {
+        Event event = new Event();
+        MessageBody body = new MessageBody();
+        body.setReferences(Map.of("company_uuid", companyId));
+        event.setEventId("evt-123");
+        event.setMessageBody(body);
+        return event;
+    }
+}
