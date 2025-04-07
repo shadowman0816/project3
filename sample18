@@ -1,47 +1,94 @@
+package net.jpmchase.payroll.processor.steps.payroll;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.persistence.entity.*;
+import net.jpmchase.payroll.processor.persistence.repository.*;
+import net.jpmchase.payroll.processor.steps.Step;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.Optional;
+
+@Slf4j
 @Component("DeterminePayrollInProgress")
 @RequiredArgsConstructor
-@Slf4j
-public class DeterminePayrollInProgressStep implements Step {
+public class PayrollInProgressDetermineStep implements Step {
 
     private final PayrollRepository payrollRepository;
-    private final PayrollEventLogRepository eventLogRepository;
+    private final PayrollTxnRepository payrollTxnRepository;
+    private final PayrollPayeeRepository payrollPayeeRepository;
+    private final PayrollPayeeAcctRepository payrollPayeeAcctRepository;
+    private final PayrollPayeeTxnRepository payrollPayeeTxnRepository;
+    private final EventLogRepository eventLogRepository;
 
     @Transactional
     @Override
     public void execute(WorkflowContext context) {
-        String payrollId = (String) context.get("payrollId");
-        String eventId = (String) context.get("eventId");
+        Event event = context.get("event", Event.class);
+        String payeeId = event.getMessageBody().getReferences().get("payeeId");
+        String eventId = event.getEventId();
 
-        if (payrollId == null) {
-            throw new IllegalArgumentException("Missing required context value: payrollId");
+        if (payeeId == null) {
+            throw new IllegalArgumentException("Missing required context value: payeeId");
         }
 
         if (eventId == null) {
-            log.warn("Missing eventId in context for payrollId: {}", payrollId);
+            log.warn("Missing eventId in context for payeeId: {}", payeeId);
         }
 
-        Optional<Payroll> payrollOpt = payrollRepository.findBySrcPayrollId(payrollId);
-
-        if (payrollOpt.isEmpty()) {
-            log.info("No payroll found for id: {}. Treating as valid case and skipping.", payrollId);
+        Optional<PayrollPayee> payeeOpt = payrollPayeeRepository.findById(payeeId);
+        if (payeeOpt.isEmpty()) {
+            log.info("No PayrollPayee found for id: {}. Treating as valid case and skipping.", payeeId);
             return;
         }
 
-        Payroll payroll = payrollOpt.get();
-        if ("IN_PROGRESS".equalsIgnoreCase(payroll.getStatusCode())) {
-            log.info("Payroll is in progress for id: {}. Marking event as failed.", payrollId);
+        PayrollPayee payee = payeeOpt.get();
+        String pyrlEnrlId = payee.getPyrlEnrlId();
+        if (pyrlEnrlId == null) {
+            log.info("No Payroll Enrollment ID for payeeId: {}. Skipping.", payeeId);
+            return;
+        }
 
+        Optional<Payroll> payrollOpt = payrollRepository.findByPyrlEnrlId(pyrlEnrlId);
+        if (payrollOpt.isEmpty()) {
+            log.info("No Payroll found for enrollment id: {}. Skipping.", pyrlEnrlId);
+            return;
+        }
+
+        String srcPyrlId = payrollOpt.get().getSrcPyrlId();
+        Optional<PayrollTxn> payrollTxnOpt = payrollTxnRepository.findBySrcPyrlId(srcPyrlId);
+        if (payrollTxnOpt.isEmpty()) {
+            log.info("No PayrollTxn found for payroll id: {}. Skipping.", srcPyrlId);
+            return;
+        }
+
+        Optional<PayrollPayeeAcct> acctOpt = payrollPayeeAcctRepository.findBySrcPayeeId(payeeId);
+        if (acctOpt.isEmpty()) {
+            log.info("No PayrollPayeeAcct found for payeeId: {}. Skipping.", payeeId);
+            return;
+        }
+
+        String pyrlPayeeAcctId = acctOpt.get().getPyrlPayeeAcctId();
+        String pyrlTxnId = payrollTxnOpt.get().getPyrlTxnId();
+
+        boolean txnExists = payrollPayeeTxnRepository.existsByPyrlPayeeAcctIdAndPyrlTxnId(pyrlPayeeAcctId, pyrlTxnId);
+        if (txnExists) {
+            log.info("Payroll in progress for payeeId: {}. Marking event as failed.", payeeId);
             PayrollEventLog logEntry = new PayrollEventLog();
-            logEntry.setSrcEventId(eventId);
+            logEntry.setSrcEvtId(eventId);
             logEntry.setEventName("DeterminePayrollInProgress");
             logEntry.setEventStatus("FAILED");
             logEntry.setErrorDescription("Payroll is currently in progress.");
             logEntry.setUpdateTimestamp(LocalDateTime.now());
-
             eventLogRepository.save(logEntry);
             context.setStatus("failed");
         } else {
-            log.info("Payroll is not in progress for id: {}. Proceeding with workflow.", payrollId);
+            log.info("Payroll is not in progress for payeeId: {}. Proceeding.", payeeId);
         }
     }
 }
+
+
