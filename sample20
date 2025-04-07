@@ -1,0 +1,129 @@
+package net.jpmchase.payroll.processor.steps.payroll;
+
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.steps.Step;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class PayrollInProgressDetermineStepTest {
+
+    @Mock
+    private PayrollPayeeRepository payeeRepository;
+
+    @Mock
+    private PayrollRepository payrollRepository;
+
+    @Mock
+    private PayrollTxnRepository payrollTxnRepository;
+
+    @Mock
+    private PayrollPayeeAcctRepository payeeAcctRepository;
+
+    @Mock
+    private PayrollPayeeTxnRepository payeeTxnRepository;
+
+    @InjectMocks
+    private PayrollInProgressDetermineStep step;
+
+    private WorkflowContext context;
+
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+        context = new WorkflowContext();
+    }
+
+    @Test
+    void testMissingPayeeId_ThrowsException() {
+        Exception exception = assertThrows(IllegalArgumentException.class, () -> {
+            step.execute(context);
+        });
+        assertTrue(exception.getMessage().contains("payeeId"));
+    }
+
+    @Test
+    void testNoPayeeFound_SkipsStep() {
+        context.put("event", TestUtils.mockEventWithReferences("employee_uuid", "123"));
+        when(payeeRepository.findById("123")).thenReturn(Optional.empty());
+        assertDoesNotThrow(() -> step.execute(context));
+    }
+
+    @Test
+    void testNoPayrollEnrlId_SkipsStep() {
+        context.put("event", TestUtils.mockEventWithReferences("employee_uuid", "123"));
+        PayrollPayeeEntity payee = new PayrollPayeeEntity();
+        payee.setPyrlEnrlId(null);
+        when(payeeRepository.findById("123")).thenReturn(Optional.of(payee));
+        assertDoesNotThrow(() -> step.execute(context));
+    }
+
+    @Test
+    void testNoPayrollFound_SkipsStep() {
+        context.put("event", TestUtils.mockEventWithReferences("employee_uuid", "123"));
+        PayrollPayeeEntity payee = new PayrollPayeeEntity();
+        payee.setPyrlEnrlId("ENRL123");
+        when(payeeRepository.findById("123")).thenReturn(Optional.of(payee));
+        when(payrollRepository.findByPyrlEnrlId("ENRL123")).thenReturn(Optional.empty());
+        assertDoesNotThrow(() -> step.execute(context));
+    }
+
+    @Test
+    void testNoTxnFound_ThenPayrollNotInProgress() {
+        context.put("event", TestUtils.mockEventWithReferences("employee_uuid", "123"));
+
+        PayrollPayeeEntity payee = new PayrollPayeeEntity();
+        payee.setPyrlEnrlId("ENRL123");
+
+        PayrollEntity payroll = new PayrollEntity();
+        payroll.setSrcPyrlId("PYRL123");
+
+        PayrollTxnEntity txn = new PayrollTxnEntity();
+        txn.setPyrlTxnId("TXN123");
+
+        PayrollPayeeAcct acct = new PayrollPayeeAcct();
+        acct.setPyrlPayeeAcctId("ACCT123");
+
+        when(payeeRepository.findById("123")).thenReturn(Optional.of(payee));
+        when(payrollRepository.findByPyrlEnrlId("ENRL123")).thenReturn(Optional.of(payroll));
+        when(payrollTxnRepository.findBySrcPyrlId("PYRL123")).thenReturn(Optional.of(txn));
+        when(payeeAcctRepository.findBySrcPayeeId("123")).thenReturn(Optional.of(acct));
+        when(payeeTxnRepository.existsByPyrlPayeeAcctIdAndPyrlTxnId("ACCT123", "TXN123")).thenReturn(false);
+
+        step.execute(context);
+        assertEquals(false, context.get("payrollInProgress"));
+    }
+
+    @Test
+    void testTxnFound_ThenPayrollInProgress() {
+        context.put("event", TestUtils.mockEventWithReferences("employee_uuid", "123"));
+
+        PayrollPayeeEntity payee = new PayrollPayeeEntity();
+        payee.setPyrlEnrlId("ENRL123");
+
+        PayrollEntity payroll = new PayrollEntity();
+        payroll.setSrcPyrlId("PYRL123");
+
+        PayrollTxnEntity txn = new PayrollTxnEntity();
+        txn.setPyrlTxnId("TXN123");
+
+        PayrollPayeeAcct acct = new PayrollPayeeAcct();
+        acct.setPyrlPayeeAcctId("ACCT123");
+
+        when(payeeRepository.findById("123")).thenReturn(Optional.of(payee));
+        when(payrollRepository.findByPyrlEnrlId("ENRL123")).thenReturn(Optional.of(payroll));
+        when(payrollTxnRepository.findBySrcPyrlId("PYRL123")).thenReturn(Optional.of(txn));
+        when(payeeAcctRepository.findBySrcPayeeId("123")).thenReturn(Optional.of(acct));
+        when(payeeTxnRepository.existsByPyrlPayeeAcctIdAndPyrlTxnId("ACCT123", "TXN123")).thenReturn(true);
+
+        step.execute(context);
+        assertEquals(true, context.get("payrollInProgress"));
+    }
+}
