@@ -1,0 +1,444 @@
+package com.example.payroll.entities;
+
+import jakarta.persistence.*;
+import lombok.*;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.UUID;
+
+@Entity
+@Table(name = "pyrl")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class Payroll {
+
+    @Id
+    @Column(name = "src_pyrl_id")
+    private String srcPayrollId;
+
+    @Column(name = "proc_dt")
+    private LocalDate procDate;
+
+    @Column(name = "pyrl_enrl_id")
+    private String payrollEnrlId;
+
+    @Column(name = "calc_ts")
+    private LocalDateTime calcTs;
+
+    @Column(name = "src_calc_ts")
+    private LocalDateTime srcCalcTs;
+
+    @Column(name = "calc_pyrl_ol_prfl_id")
+    private Long calcPayrollProfileId;
+
+    @Column(name = "src_pyrl_sts_nm")
+    private Long srcPayrollStatusNm;
+
+    @Column(name = "pyrl_sts_cd")
+    private String payrollStatusCd;
+
+    @Column(name = "pyrl_type_cd")
+    private String payrollTypeCd;
+
+    @Column(name = "fund_acct_nb")
+    private String fundAcctNumber;
+
+    @Column(name = "pyrl_amt")
+    private BigDecimal payrollAmount;
+
+    @Column(name = "pyrl_strt_dt")
+    private LocalDateTime payrollStartDate;
+
+    @Column(name = "pyrl_end_dt")
+    private LocalDateTime payrollEndDate;
+
+    @Column(name = "risk_ass_sts_cd")
+    private String riskAssessmentStatusCd;
+
+    @Column(name = "risk_ass_ts")
+    private LocalDateTime riskAssessmentTs;
+
+    @Column(name = "sbmt_prty_ol_prfl_id")
+    private Long submitterProfileId;
+
+    @Column(name = "sbmt_ts")
+    private LocalDateTime submitTimestamp;
+
+    @Column(name = "apprv_prty_ol_prfl_id")
+    private Long approverProfileId;
+
+    @Column(name = "apprv_ts")
+    private LocalDateTime approvalTimestamp;
+
+    @Column(name = "cncl_pyrl_ol_prfl_id")
+    private Long cancelProfileId;
+
+    @Column(name = "cncl_ts")
+    private LocalDateTime cancelTimestamp;
+
+    @Column(name = "lmt_amt")
+    private BigDecimal limitAmount;
+
+    @Column(name = "lmt_type_cd")
+    private String limitTypeCd;
+
+    @Column(name = "seg_cd")
+    private String segmentCode;
+
+    @Column(name = "pyrl_dlvr_type_cd")
+    private String deliveryTypeCd;
+
+    @Column(name = "err_cd")
+    private String errorCode;
+
+    @Column(name = "err_desc_tx")
+    private String errorDescription;
+
+    @Column(name = "src_pay_schd_id")
+    private String srcPayScheduleId;
+
+    @Column(name = "src_evt_id")
+    private String srcEventId;
+
+    @Column(name = "cre_ts")
+    private LocalDateTime createdTs;
+
+    @Column(name = "cre_usr_id")
+    private String createdBy;
+
+    @Column(name = "updt_ts")
+    private LocalDateTime updatedTs;
+
+    @Column(name = "updt_usr_id")
+    private String updatedBy;
+}
+
+public interface PyrlPayeeRepository extends JpaRepository<PyrlPayee, UUID> {
+    Optional<PyrlPayee> findByPayeeId(Long payeeId);
+}
+package com.example.payroll.entity;
+
+import jakarta.persistence.*;
+import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.util.UUID;
+
+@Entity
+@Table(name = "pyrl_txn")
+public class PyrlTxn {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "pyrl_txn_id")
+    private Long pyrlTxnId;
+
+    @Column(name = "src_pyrl_id", nullable = false)
+    private UUID srcPyrlId;
+
+    @Column(name = "txn_sts_cd")
+    private Short txnStsCd;
+
+    @Column(name = "txn_amt")
+    private BigDecimal txnAmt;
+
+    @Column(name = "txn_type")
+    private String txnType;
+
+    @Column(name = "cre_ts")
+    private Timestamp creTs;
+
+    @Column(name = "updt_ts")
+    private Timestamp updtTs;
+
+    // Getters and Setters
+    public Long getPyrlTxnId() {
+        return pyrlTxnId;
+    }
+
+    public void setPyrlTxnId(Long pyrlTxnId) {
+        this.pyrlTxnId = pyrlTxnId;
+    }
+
+    public UUID getSrcPyrlId() {
+        return srcPyrlId;
+    }
+
+    public void setSrcPyrlId(UUID srcPyrlId) {
+        this.srcPyrlId = srcPyrlId;
+    }
+
+    public Short getTxnStsCd() {
+        return txnStsCd;
+    }
+
+    public void setTxnStsCd(Short txnStsCd) {
+        this.txnStsCd = txnStsCd;
+    }
+
+    public BigDecimal getTxnAmt() {
+        return txnAmt;
+    }
+
+    public void setTxnAmt(BigDecimal txnAmt) {
+        this.txnAmt = txnAmt;
+    }
+
+    public String getTxnType() {
+        return txnType;
+    }
+
+    public void setTxnType(String txnType) {
+        this.txnType = txnType;
+    }
+
+    public Timestamp getCreTs() {
+        return creTs;
+    }
+
+    public void setCreTs(Timestamp creTs) {
+        this.creTs = creTs;
+    }
+
+    public Timestamp getUpdtTs() {
+        return updtTs;
+    }
+
+    public void setUpdtTs(Timestamp updtTs) {
+        this.updtTs = updtTs;
+    }
+}
+package com.example.payroll.repository;
+
+import com.example.payroll.entity.PyrlTxn;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+import java.util.UUID;
+
+public interface PyrlTxnRepository extends JpaRepository<PyrlTxn, Long> {
+    List<PyrlTxn> findBySrcPyrlId(UUID srcPyrlId);
+}
+package com.example.payroll.entity;
+
+import jakarta.persistence.*;
+import java.math.BigDecimal;
+import java.sql.Timestamp;
+
+@Entity
+@Table(name = "pyrl_payee_txn")
+public class PyrlPayeeTxn {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "payee_txn_id")
+    private Long payeeTxnId;
+
+    @Column(name = "pyrl_txn_id", nullable = false)
+    private Long pyrlTxnId;
+
+    @Column(name = "pyrl_payee_acct_id", nullable = false)
+    private Long pyrlPayeeAcctId;
+
+    @Column(name = "txn_status")
+    private String txnStatus;
+
+    @Column(name = "txn_amt")
+    private BigDecimal txnAmt;
+
+    @Column(name = "cre_ts")
+    private Timestamp creTs;
+
+    @Column(name = "updt_ts")
+    private Timestamp updtTs;
+
+    // Getters and Setters
+    public Long getPayeeTxnId() {
+        return payeeTxnId;
+    }
+
+    public void setPayeeTxnId(Long payeeTxnId) {
+        this.payeeTxnId = payeeTxnId;
+    }
+
+    public Long getPyrlTxnId() {
+        return pyrlTxnId;
+    }
+
+    public void setPyrlTxnId(Long pyrlTxnId) {
+        this.pyrlTxnId = pyrlTxnId;
+    }
+
+    public Long getPyrlPayeeAcctId() {
+        return pyrlPayeeAcctId;
+    }
+
+    public void setPyrlPayeeAcctId(Long pyrlPayeeAcctId) {
+        this.pyrlPayeeAcctId = pyrlPayeeAcctId;
+    }
+
+    public String getTxnStatus() {
+        return txnStatus;
+    }
+
+    public void setTxnStatus(String txnStatus) {
+        this.txnStatus = txnStatus;
+    }
+
+    public BigDecimal getTxnAmt() {
+        return txnAmt;
+    }
+
+    public void setTxnAmt(BigDecimal txnAmt) {
+        this.txnAmt = txnAmt;
+    }
+
+    public Timestamp getCreTs() {
+        return creTs;
+    }
+
+    public void setCreTs(Timestamp creTs) {
+        this.creTs = creTs;
+    }
+
+    public Timestamp getUpdtTs() {
+        return updtTs;
+    }
+
+    public void setUpdtTs(Timestamp updtTs) {
+        this.updtTs = updtTs;
+    }
+}
+package com.example.payroll.repository;
+
+import com.example.payroll.entity.PyrlPayeeTxn;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+
+public interface PyrlPayeeTxnRepository extends JpaRepository<PyrlPayeeTxn, Long> {
+    List<PyrlPayeeTxn> findByPyrlTxnIdAndPyrlPayeeAcctId(Long pyrlTxnId, Long pyrlPayeeAcctId);
+}
+
+package com.example.payroll.entity;
+
+import jakarta.persistence.*;
+import java.sql.Timestamp;
+
+@Entity
+@Table(name = "pyrl_payee_acct")
+public class PyrlPayeeAcct {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "pyrl_payee_acct_id")
+    private Long pyrlPayeeAcctId;
+
+    @Column(name = "src_payee_id", nullable = false)
+    private String srcPayeeId;
+
+    @Column(name = "acct_number")
+    private String acctNumber;
+
+    @Column(name = "routing_number")
+    private String routingNumber;
+
+    @Column(name = "bank_name")
+    private String bankName;
+
+    @Column(name = "acct_type")
+    private String acctType;
+
+    @Column(name = "acct_status")
+    private String acctStatus;
+
+    @Column(name = "cre_ts")
+    private Timestamp creTs;
+
+    @Column(name = "updt_ts")
+    private Timestamp updtTs;
+
+    // Getters and Setters
+    public Long getPyrlPayeeAcctId() {
+        return pyrlPayeeAcctId;
+    }
+
+    public void setPyrlPayeeAcctId(Long pyrlPayeeAcctId) {
+        this.pyrlPayeeAcctId = pyrlPayeeAcctId;
+    }
+
+    public String getSrcPayeeId() {
+        return srcPayeeId;
+    }
+
+    public void setSrcPayeeId(String srcPayeeId) {
+        this.srcPayeeId = srcPayeeId;
+    }
+
+    public String getAcctNumber() {
+        return acctNumber;
+    }
+
+    public void setAcctNumber(String acctNumber) {
+        this.acctNumber = acctNumber;
+    }
+
+    public String getRoutingNumber() {
+        return routingNumber;
+    }
+
+    public void setRoutingNumber(String routingNumber) {
+        this.routingNumber = routingNumber;
+    }
+
+    public String getBankName() {
+        return bankName;
+    }
+
+    public void setBankName(String bankName) {
+        this.bankName = bankName;
+    }
+
+    public String getAcctType() {
+        return acctType;
+    }
+
+    public void setAcctType(String acctType) {
+        this.acctType = acctType;
+    }
+
+    public String getAcctStatus() {
+        return acctStatus;
+    }
+
+    public void setAcctStatus(String acctStatus) {
+        this.acctStatus = acctStatus;
+    }
+
+    public Timestamp getCreTs() {
+        return creTs;
+    }
+
+    public void setCreTs(Timestamp creTs) {
+        this.creTs = creTs;
+    }
+
+    public Timestamp getUpdtTs() {
+        return updtTs;
+    }
+
+    public void setUpdtTs(Timestamp updtTs) {
+        this.updtTs = updtTs;
+    }
+}
+package com.example.payroll.repository;
+
+import com.example.payroll.entity.PyrlPayeeAcct;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+
+public interface PyrlPayeeAcctRepository extends JpaRepository<PyrlPayeeAcct, Long> {
+    Optional<PyrlPayeeAcct> findBySrcPayeeId(String srcPayeeId);
+}
