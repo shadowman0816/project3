@@ -1,0 +1,68 @@
+package net.jpmchase.payroll.processor.steps.payee.gusto;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.remote.gusto.model.payment.EmployeePaymentConfiguration;
+import net.jpmchase.payroll.processor.remote.gusto.model.payment.Split;
+import net.jpmchase.payroll.processor.service.GustoPaymentConfigurationService;
+import net.jpmchase.payroll.processor.steps.Step;
+import net.jpmchase.payroll.processor.model.Event;
+import org.springframework.stereotype.Component;
+
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+
+import static net.jpmchase.payroll.processor.common.constants.ProcessorConstants.PROCESSOR_FAILED;
+
+@Slf4j
+@Component("FetchEmployeeBankAccountInformationFromGusto")
+@RequiredArgsConstructor
+public class GustoEmployeeBankAccountRetrievalStep implements Step {
+
+    private final GustoPaymentConfigurationService paymentConfigurationService;
+
+    @Override
+    public void execute(WorkflowContext context) {
+        Event event = context.get("event", Event.class);
+
+        String companyId = Optional.ofNullable(event)
+                .map(Event::getMessageBody)
+                .map(body -> body.getEnterprisePartyIdentifier())
+                .map(UUID::toString)
+                .orElseThrow(() -> new IllegalArgumentException("Missing enterprise party identifier"));
+
+        String employeeId = Optional.ofNullable(event)
+                .map(Event::getMessageBody)
+                .map(body -> body.getEntityUUID())
+                .map(UUID::toString)
+                .orElseThrow(() -> new IllegalArgumentException("Missing employee UUID"));
+
+        String resourceUUID = Optional.ofNullable(event)
+                .map(Event::getMessageBody)
+                .map(body -> body.getResourceUUID())
+                .map(UUID::toString)
+                .orElseThrow(() -> new IllegalArgumentException("Missing resource UUID"));
+
+        log.info("Fetching Gusto payment configuration for company: {}, employee: {}, bank account UUID: {}", companyId, employeeId, resourceUUID);
+
+        EmployeePaymentConfiguration paymentConfig =
+                paymentConfigurationService.getPaymentConfigurationsForAnEmployee(companyId, employeeId);
+
+        Set<Split> splits = Optional.ofNullable(paymentConfig.getSplits()).orElse(Set.of());
+
+        boolean exists = splits.stream()
+                .map(Split::getBankAccountUUID)
+                .anyMatch(uuid -> uuid != null && uuid.equalsIgnoreCase(resourceUUID));
+
+        if (exists) {
+            log.warn("Bank account UUID {} still exists in Gusto. Cannot update payment method to CHECK. Marking event as failed.", resourceUUID);
+            context.set("updateToCheck", false);
+            throw new ProcessorException(PROCESSOR_FAILED, "Bank account still exists in Gusto for resource UUID: " + resourceUUID);
+        } else {
+            log.info("Bank account UUID {} not found in Gusto. Updating payment method to CHECK.", resourceUUID);
+            context.set("updateToCheck", true);
+        }
+    }
+}
