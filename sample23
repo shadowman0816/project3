@@ -266,3 +266,127 @@ public class TestUtils {
     }
 }
 
+@ExtendWith(MockitoExtension.class)
+class GustoEmployeeBankAccountRetrievalStepTest {
+
+    @Mock private GustoPaymentConfigurationService paymentConfigurationService;
+    @Mock private EnrolLmentEntityRepository companyEnrollmentRepository;
+
+    @InjectMocks
+    private GustoEmployeeBankAccountRetrievalStep step;
+
+    private WorkflowContext context;
+
+    @BeforeEach
+    void setup() {
+        context = new WorkflowContext();
+    }
+
+    @Test
+    void testThrowsExceptionWhenCompanyIdMissing() {
+        Event event = new Event();
+        context.put("event", event);
+
+        assertThrows(IllegalArgumentException.class, () -> step.execute(context));
+    }
+
+    @Test
+    void testThrowsExceptionWhenBankAccountUUIDMissing() {
+        UUID employeeId = UUID.randomUUID();
+        Event event = TestUtils.mockEventWithAll(employeeId.toString(), null, null);
+        context.put("event", event);
+
+        assertThrows(IllegalArgumentException.class, () -> step.execute(context));
+    }
+
+    @Test
+    void testThrowsExceptionWhenEnrollmentMissing() {
+        UUID companyId = UUID.randomUUID();
+        UUID bankAccountUUID = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        context.put("event", TestUtils.mockEventWithAll(employeeId.toString(), companyId, bankAccountUUID));
+
+        when(companyEnrollmentRepository.findByRelEntpPrtyId(companyId.toString())).thenReturn(Optional.empty());
+
+        ProcessorException ex = assertThrows(ProcessorException.class, () -> step.execute(context));
+        assertTrue(ex.getMessage().contains("No enrollment found"));
+    }
+
+    @Test
+    void testBankAccountStillExistsInGusto_ThrowsException() {
+        UUID companyId = UUID.randomUUID();
+        UUID bankAccountUUID = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        context.put("event", TestUtils.mockEventWithAll(employeeId.toString(), companyId, bankAccountUUID));
+
+        EnrolLmentEntity enrollment = new EnrolLmentEntity();
+        enrollment.setRelEntpPrtyId(companyId.toString());
+
+        when(companyEnrollmentRepository.findByRelEntpPrtyId(companyId.toString()))
+                .thenReturn(Optional.of(enrollment));
+
+        Split split = new Split();
+        split.setBankAccountUUID(bankAccountUUID.toString());
+
+        EmployeePaymentConfiguration config = new EmployeePaymentConfiguration();
+        config.setSplits(Set.of(split));
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee(companyId.toString(), employeeId.toString()))
+                .thenReturn(config);
+
+        ProcessorException ex = assertThrows(ProcessorException.class, () -> step.execute(context));
+        assertTrue(ex.getMessage().contains("still exists in Gusto"));
+    }
+
+    @Test
+    void testBankAccountNotInSplits_ContextUpdateToCheckTrue() {
+        UUID companyId = UUID.randomUUID();
+        UUID bankAccountUUID = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        context.put("event", TestUtils.mockEventWithAll(employeeId.toString(), companyId, bankAccountUUID));
+
+        EnrolLmentEntity enrollment = new EnrolLmentEntity();
+        enrollment.setRelEntpPrtyId(companyId.toString());
+
+        when(companyEnrollmentRepository.findByRelEntpPrtyId(companyId.toString()))
+                .thenReturn(Optional.of(enrollment));
+
+        Split split = new Split();
+        split.setBankAccountUUID("different-id");
+
+        EmployeePaymentConfiguration config = new EmployeePaymentConfiguration();
+        config.setSplits(Set.of(split));
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee(companyId.toString(), employeeId.toString()))
+                .thenReturn(config);
+
+        step.execute(context);
+
+        assertTrue((Boolean) context.get("updateToCheck"));
+    }
+
+    @Test
+    void testEmptySplits_ContextUpdateToCheckTrue() {
+        UUID companyId = UUID.randomUUID();
+        UUID bankAccountUUID = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        context.put("event", TestUtils.mockEventWithAll(employeeId.toString(), companyId, bankAccountUUID));
+
+        EnrolLmentEntity enrollment = new EnrolLmentEntity();
+        enrollment.setRelEntpPrtyId(companyId.toString());
+
+        when(companyEnrollmentRepository.findByRelEntpPrtyId(companyId.toString()))
+                .thenReturn(Optional.of(enrollment));
+
+        EmployeePaymentConfiguration config = new EmployeePaymentConfiguration();
+        config.setSplits(Collections.emptySet());
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee(companyId.toString(), employeeId.toString()))
+                .thenReturn(config);
+
+        step.execute(context);
+
+        assertTrue((Boolean) context.get("updateToCheck"));
+    }
+}
+
