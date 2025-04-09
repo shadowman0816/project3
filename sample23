@@ -66,3 +66,137 @@ public class GustoEmployeeBankAccountRetrievalStep implements Step {
         }
     }
 }
+package net.jpmchase.payroll.processor.steps.payee.gusto;
+
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.exception.BusinessException;
+import net.jpmchase.payroll.processor.exception.ProcessorException;
+import net.jpmchase.payroll.processor.remote.gusto.model.payment.EmployeePaymentConfiguration;
+import net.jpmchase.payroll.processor.remote.gusto.model.payment.Split;
+import net.jpmchase.payroll.processor.repository.EnrollmentRepository;
+import net.jpmchase.payroll.processor.steps.Step;
+import net.jpmchase.payroll.processor.service.GustoPaymentConfigurationService;
+import net.jpmchase.payroll.processor.model.entity.EnrollmentEntity;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import java.util.*;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class GustoEmployeeBankAccountRetrievalStepTest {
+
+    @Mock
+    private GustoPaymentConfigurationService paymentConfigurationService;
+
+    @Mock
+    private EnrollmentRepository companyEnrollmentRepository;
+
+    @InjectMocks
+    private GustoEmployeeBankAccountRetrievalStep step;
+
+    private WorkflowContext context;
+
+    @BeforeEach
+    void setup() {
+        MockitoAnnotations.openMocks(this);
+        context = new WorkflowContext();
+    }
+
+    @Test
+    void testMissingEmployeeIdThrowsException() {
+        // companyId and bankAccountUUID are present, employeeId missing
+        context.put("event", TestUtils.mockEventWithReferencesAndResource("company_uuid", "C1", "bank_account_uuid", "B1"));
+
+        Exception ex = assertThrows(BusinessException.class, () -> step.execute(context));
+        assertTrue(ex.getMessage().contains("Missing Employee identifier"));
+    }
+
+    @Test
+    void testMissingCompanyIdThrowsException() {
+        context.put("event", TestUtils.mockEventWithReferencesOnly("employee_uuid", "E1"));
+
+        Exception ex = assertThrows(BusinessException.class, () -> step.execute(context));
+        assertTrue(ex.getMessage().contains("Missing Company UUID"));
+    }
+
+    @Test
+    void testMissingBankAccountUUIDThrowsException() {
+        context.put("event", TestUtils.mockEventWithReferences("employee_uuid", "E1", "company_uuid", "C1"));
+
+        Exception ex = assertThrows(BusinessException.class, () -> step.execute(context));
+        assertTrue(ex.getMessage().contains("Missing Bank Account UUID"));
+    }
+
+    @Test
+    void testBankAccountExistsInSplitsThrowsProcessorException() {
+        context.put("event", TestUtils.mockEventWithAll("E1", "C1", "B1"));
+
+        EnrollmentEntity enrollment = new EnrollmentEntity();
+        when(companyEnrollmentRepository.findByRelEntpPrtyId("C1")).thenReturn(Optional.of(enrollment));
+
+        Split split = new Split();
+        split.setBankAccountUUID("B1");
+        EmployeePaymentConfiguration paymentConfig = new EmployeePaymentConfiguration();
+        paymentConfig.setSplits(Set.of(split));
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee("C1", "E1")).thenReturn(paymentConfig);
+
+        ProcessorException ex = assertThrows(ProcessorException.class, () -> step.execute(context));
+        assertTrue(ex.getMessage().contains("still exists in Gusto"));
+    }
+
+    @Test
+    void testBankAccountNotFoundInSplitsThenUpdateToCheck() {
+        context.put("event", TestUtils.mockEventWithAll("E1", "C1", "B1"));
+
+        EnrollmentEntity enrollment = new EnrollmentEntity();
+        when(companyEnrollmentRepository.findByRelEntpPrtyId("C1")).thenReturn(Optional.of(enrollment));
+
+        Split split = new Split();
+        split.setBankAccountUUID("B2");  // different UUID
+        EmployeePaymentConfiguration paymentConfig = new EmployeePaymentConfiguration();
+        paymentConfig.setSplits(Set.of(split));
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee("C1", "E1")).thenReturn(paymentConfig);
+
+        step.execute(context);
+
+        assertEquals(true, context.get("updateToCheck"));
+    }
+
+    @Test
+    void testEmptySplitsThenNoUpdateToCheck() {
+        context.put("event", TestUtils.mockEventWithAll("E1", "C1", "B1"));
+
+        EnrollmentEntity enrollment = new EnrollmentEntity();
+        when(companyEnrollmentRepository.findByRelEntpPrtyId("C1")).thenReturn(Optional.of(enrollment));
+
+        EmployeePaymentConfiguration paymentConfig = new EmployeePaymentConfiguration();
+        paymentConfig.setSplits(Collections.emptySet());
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee("C1", "E1")).thenReturn(paymentConfig);
+
+        step.execute(context);
+
+        assertEquals(false, context.get("updateToCheck")); // Not explicitly set; could default to null or false
+    }
+
+    @Test
+    void testEnrollmentNotFoundDoesNotThrow() {
+        context.put("event", TestUtils.mockEventWithAll("E1", "C1", "B1"));
+
+        when(companyEnrollmentRepository.findByRelEntpPrtyId("C1")).thenReturn(Optional.empty());
+
+        EmployeePaymentConfiguration paymentConfig = new EmployeePaymentConfiguration();
+        paymentConfig.setSplits(Collections.emptySet());
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee("C1", "E1")).thenReturn(paymentConfig);
+
+        assertDoesNotThrow(() -> step.execute(context));
+    }
+}
