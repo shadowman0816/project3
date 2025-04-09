@@ -48,3 +48,84 @@ public class StorePayeeBankAccountInformationStep implements Step {
         log.info("Completed update to CHECK for payee {}", payeeId);
     }
 }
+@ExtendWith(MockitoExtension.class)
+class StorePayeeBankAccountInformationStepTest {
+
+    @Mock private PayeeRepository payeeRepository;
+    @Mock private PayeeAccountRepository payeeAccountRepository;
+    @Mock private PayeeAccountAuditRepository payeeAccountAuditRepository;
+
+    @InjectMocks
+    private StorePayeeBankAccountInformationStep step;
+
+    @Test
+    void testUpdateToCheckTrue_PerformsAllUpdates() {
+        // Given
+        UUID payeeId = UUID.randomUUID();
+        WorkflowContext context = new WorkflowContext();
+        context.put("updateToCheck", true);
+        context.put("event", TestUtils.mockEventWithResourceUUID(payeeId.toString()));
+
+        PyrlPayeeEntity payee = new PyrlPayeeEntity();
+        payee.setPymtModeNm("ACH");
+        payee.setPyrlDlvrTypeCd("ACH");
+
+        PyrlPayeeAcctEntity account = new PyrlPayeeAcctEntity();
+        account.setPayeeAcctStsCd("ACTIVE");
+        account.setSrcPayeeId(payeeId.toString());
+
+        when(payeeRepository.findBySrcPayeeId(payeeId.toString())).thenReturn(Optional.of(payee));
+        when(payeeAccountRepository.findActiveBySrcPayeeId(payeeId.toString())).thenReturn(Optional.of(account));
+
+        // When
+        step.execute(context);
+
+        // Then
+        assertEquals("CHECK", payee.getPymtModeNm());
+        assertEquals("CHECK", payee.getPyrlDlvrTypeCd());
+        assertEquals("INACTIVE", account.getPayeeAcctStsCd());
+
+        verify(payeeRepository).save(payee);
+        verify(payeeAccountAuditRepository).save(any(PyrlPayeeAcctAudtEntity.class));
+        verify(payeeAccountRepository).save(account);
+    }
+
+    @Test
+    void testUpdateToCheckFalse_SkipsExecution() {
+        WorkflowContext context = new WorkflowContext();
+        context.put("updateToCheck", false);
+
+        step.execute(context);
+
+        verifyNoInteractions(payeeRepository, payeeAccountRepository, payeeAccountAuditRepository);
+    }
+
+    @Test
+    void testMissingPayee_ThrowsProcessorException() {
+        UUID payeeId = UUID.randomUUID();
+        WorkflowContext context = new WorkflowContext();
+        context.put("updateToCheck", true);
+        context.put("event", TestUtils.mockEventWithResourceUUID(payeeId.toString()));
+
+        when(payeeRepository.findBySrcPayeeId(payeeId.toString())).thenReturn(Optional.empty());
+
+        ProcessorException ex = assertThrows(ProcessorException.class, () -> step.execute(context));
+        assertTrue(ex.getMessage().contains("Payee not found"));
+    }
+
+    @Test
+    void testMissingActivePayeeAccount_ThrowsProcessorException() {
+        UUID payeeId = UUID.randomUUID();
+        WorkflowContext context = new WorkflowContext();
+        context.put("updateToCheck", true);
+        context.put("event", TestUtils.mockEventWithResourceUUID(payeeId.toString()));
+
+        PyrlPayeeEntity payee = new PyrlPayeeEntity();
+        when(payeeRepository.findBySrcPayeeId(payeeId.toString())).thenReturn(Optional.of(payee));
+        when(payeeAccountRepository.findActiveBySrcPayeeId(payeeId.toString())).thenReturn(Optional.empty());
+
+        ProcessorException ex = assertThrows(ProcessorException.class, () -> step.execute(context));
+        assertTrue(ex.getMessage().contains("Active payee account not found"));
+    }
+}
+
