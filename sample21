@@ -2,191 +2,76 @@ package net.jpmchase.payroll.processor.steps.payee;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.client.GustoEmployeeService;
 import net.jpmchase.payroll.processor.common.context.WorkflowContext;
-import net.jpmchase.payroll.processor.events.model.Event;
-import net.jpmchase.payroll.processor.repository.CompanyEnrollmentRepository;
-import net.jpmchase.payroll.processor.repository.EventLogRepository;
+import net.jpmchase.payroll.processor.domain.CompanyEnrollmentRepository;
+import net.jpmchase.payroll.processor.domain.entity.EnrollmentEntity;
+import net.jpmchase.payroll.processor.domain.entity.EnrollmentStatusEntity;
 import net.jpmchase.payroll.processor.steps.Step;
-import net.jpmchase.payroll.processor.entity.CompanyEnrollmentEntity;
-import net.jpmchase.payroll.processor.entity.PayrollEventLog;
-
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.Optional;
 
-@Component("DetermineCompanyEnrollmentStatus")
-@RequiredArgsConstructor
 @Slf4j
+@Component("CompanyEnrollmentDeterminationStep")
+@RequiredArgsConstructor
 public class CompanyEnrollmentDeterminationStep implements Step {
 
     private final CompanyEnrollmentRepository companyEnrollmentRepository;
-    private final EventLogRepository eventLogRepository;
+    private final GustoEmployeeService gustoEmployeeService;
 
     @Override
     @Transactional
     public void execute(WorkflowContext context) {
-        Event event = context.get("event", Event.class);
-        String companyId = event.getMessageBody().getReferences().get("company_uuid");
+        var event = context.get("event", net.jpmchase.payroll.processor.events.Event.class);
 
-        if (companyId == null) {
-            throw new IllegalArgumentException("Missing required context value: company_uuid");
-        }
+        String companyId = Optional.ofNullable(event)
+                .map(e -> e.getMessageBody().getResourceUUID())
+                .map(Object::toString)
+                .orElseThrow(() -> new IllegalArgumentException("Missing required context value: companyId"));
 
-        Optional<CompanyEnrollmentEntity> enrollmentOpt = companyEnrollmentRepository.findByCompanyId(companyId);
+        String payeeId = Optional.ofNullable(event)
+                .map(e -> e.getMessageBody().getEntityUUID())
+                .map(Object::toString)
+                .orElseThrow(() -> new IllegalArgumentException("Missing required context value: payeeId"));
+
+        String payeeType = Optional.ofNullable(event)
+                .map(e -> e.getMessageBody().getEntityType())
+                .orElse("employee");
+
+        log.info("Checking enrollment for companyId: {}, payeeId: {}, payeeType: {}", companyId, payeeId, payeeType);
+
+        Optional<EnrollmentEntity> enrollmentOpt = companyEnrollmentRepository.findByRelEntpPrtyId(companyId);
 
         if (enrollmentOpt.isEmpty()) {
             log.warn("No enrollment found for companyId: {}. Skipping.", companyId);
+            context.put("companyEnrolled", false);
             return;
         }
 
-        CompanyEnrollmentEntity enrollment = enrollmentOpt.get();
-        String status = enrollment.getEnrlStatus();
+        EnrollmentEntity enrollment = enrollmentOpt.get();
+        EnrollmentStatusEntity status = enrollment.getEnrlStsCd();
 
-        if (!"COMPLETE".equalsIgnoreCase(status)) {
-            log.info("Company enrollment incomplete for companyId: {}. Marking event as failed.", companyId);
-            PayrollEventLog logEntry = new PayrollEventLog();
-            logEntry.setEventId(event.getEventId());
-            logEntry.setEventName("DetermineCompanyEnrollmentStatus");
-            logEntry.setEventStatus("FAILED");
-            logEntry.setErrorDescription("Company enrollment not complete.");
-            logEntry.setUpdateTimestamp(LocalDateTime.now());
-            eventLogRepository.save(logEntry);
-
-            context.setStatus("FAILED");
-        } else {
-            log.info("Company enrollment complete for companyId: {}. Proceeding.", companyId);
+        if ("COMPLETE".equalsIgnoreCase(status.getEnrlStsCd())) {
+            log.info("Enrollment already COMPLETE for companyId: {}", companyId);
             context.put("companyEnrolled", true);
+            return;
         }
-    }
-}
 
-package net.jpmchase.payroll.processor.repository;
+        log.info("Enrollment status not complete. Calling Gusto to verify onboarding status...");
 
-import net.jpmchase.payroll.processor.entity.CompanyEnrollmentEntity;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
+        boolean isOnboarded = gustoEmployeeService.getEmployeeOnboardingStatus(companyId, payeeId, payeeType);
 
-import java.util.Optional;
-
-@Repository
-public interface CompanyEnrollmentRepository extends JpaRepository<CompanyEnrollmentEntity, String> {
-    Optional<CompanyEnrollmentEntity> findByCompanyId(String companyId);
-}
-package net.jpmchase.payroll.processor.steps.payee;
-
-import net.jpmchase.payroll.processor.common.context.WorkflowContext;
-import net.jpmchase.payroll.processor.entity.CompanyEnrollmentEntity;
-import net.jpmchase.payroll.processor.entity.PayrollEventLog;
-import net.jpmchase.payroll.processor.events.model.Event;
-import net.jpmchase.payroll.processor.events.model.MessageBody;
-import net.jpmchase.payroll.processor.repository.CompanyEnrollmentRepository;
-import net.jpmchase.payroll.processor.repository.EventLogRepository;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-
-import java.time.LocalDateTime;
-import java.util.Map;
-import java.util.Optional;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-
-class CompanyEnrollmentDeterminationStepTest {
-
-    private CompanyEnrollmentRepository enrollmentRepository;
-    private EventLogRepository eventLogRepository;
-    private CompanyEnrollmentDeterminationStep step;
-
-    @BeforeEach
-    void setup() {
-        enrollmentRepository = mock(CompanyEnrollmentRepository.class);
-        eventLogRepository = mock(EventLogRepository.class);
-        step = new CompanyEnrollmentDeterminationStep(enrollmentRepository, eventLogRepository);
-    }
-
-    @Test
-    void testExecute_enrollmentComplete() {
-        Event event = createEvent("COMP123");
-        WorkflowContext context = new WorkflowContext();
-        context.put("event", event);
-
-        CompanyEnrollmentEntity entity = new CompanyEnrollmentEntity();
-        entity.setPyrlEnrlId("ENRL123");
-        entity.setEnrlStatus("COMPLETE");
-
-        when(enrollmentRepository.findByCompanyId("COMP123")).thenReturn(Optional.of(entity));
-
-        step.execute(context);
-
-        assertTrue((Boolean) context.get("companyEnrolled"));
-        verify(eventLogRepository, never()).save(any());
-    }
-
-    @Test
-    void testExecute_enrollmentNotComplete_logsFailure() {
-        Event event = createEvent("COMP999");
-        WorkflowContext context = new WorkflowContext();
-        context.put("event", event);
-
-        CompanyEnrollmentEntity entity = new CompanyEnrollmentEntity();
-        entity.setPyrlEnrlId("ENRL999");
-        entity.setEnrlStatus("IN_PROGRESS");
-
-        when(enrollmentRepository.findByCompanyId("COMP999")).thenReturn(Optional.of(entity));
-
-        step.execute(context);
-
-        assertEquals("FAILED", context.getStatus());
-
-        ArgumentCaptor<PayrollEventLog> captor = ArgumentCaptor.forClass(PayrollEventLog.class);
-        verify(eventLogRepository).save(captor.capture());
-
-        PayrollEventLog savedLog = captor.getValue();
-        assertEquals("DetermineCompanyEnrollmentStatus", savedLog.getEventName());
-        assertEquals("FAILED", savedLog.getEventStatus());
-        assertEquals("Company enrollment not complete.", savedLog.getErrorDescription());
-        assertNotNull(savedLog.getUpdateTimestamp());
-    }
-
-    @Test
-    void testExecute_enrollmentNotFound_skips() {
-        Event event = createEvent("COMP404");
-        WorkflowContext context = new WorkflowContext();
-        context.put("event", event);
-
-        when(enrollmentRepository.findByCompanyId("COMP404")).thenReturn(Optional.empty());
-
-        step.execute(context);
-
-        assertNull(context.get("companyEnrolled"));
-        verify(eventLogRepository, never()).save(any());
-    }
-
-    @Test
-    void testExecute_nullCompanyId_throwsException() {
-        Event event = new Event();
-        MessageBody body = new MessageBody();
-        body.setReferences(Map.of()); // no company_uuid
-        event.setMessageBody(body);
-
-        WorkflowContext context = new WorkflowContext();
-        context.put("event", event);
-
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> step.execute(context));
-        assertEquals("Missing required context value: company_uuid", exception.getMessage());
-
-        verifyNoInteractions(enrollmentRepository, eventLogRepository);
-    }
-
-    private Event createEvent(String companyId) {
-        Event event = new Event();
-        MessageBody body = new MessageBody();
-        body.setReferences(Map.of("company_uuid", companyId));
-        event.setEventId("evt-123");
-        event.setMessageBody(body);
-        return event;
+        if (isOnboarded) {
+            log.info("Gusto returned onboarded. Updating enrollment status to COMPLETE.");
+            status.setEnrlStsCd("COMPLETE");
+            enrollment.setEnrlStsCd(status);
+            companyEnrollmentRepository.save(enrollment);
+            context.put("companyEnrolled", true);
+        } else {
+            log.warn("Gusto returned not onboarded. Enrollment incomplete for companyId: {}", companyId);
+            context.put("companyEnrolled", false);
+        }
     }
 }
