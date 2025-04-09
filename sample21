@@ -76,3 +76,133 @@ public class CompanyEnrollmentDeterminationStep implements Step {
         }
     }
 }
+package net.jpmchase.payroll.processor.steps.payee;
+
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.domain.entity.EnrollmentEntity;
+import net.jpmchase.payroll.processor.domain.entity.EnrollmentStatusEntity;
+import net.jpmchase.payroll.processor.exception.ProcessorException;
+import net.jpmchase.payroll.processor.remote.gusto.model.CompanyOnboardingResponse;
+import net.jpmchase.payroll.processor.repository.EnrollmentRepository;
+import net.jpmchase.payroll.processor.service.GustoCompanyService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class CompanyEnrollmentDeterminationStepTest {
+
+    @Mock
+    private EnrollmentRepository companyEnrollmentRepository;
+
+    @Mock
+    private GustoCompanyService gustoCompanyService;
+
+    @InjectMocks
+    private CompanyEnrollmentDeterminationStep step;
+
+    private WorkflowContext context;
+
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+        context = new WorkflowContext();
+    }
+
+    @Test
+    void testMissingCompanyId_ThrowsException() {
+        Exception exception = assertThrows(RuntimeException.class, () -> step.execute(context));
+        assertTrue(exception.getMessage().contains("Missing required context value"));
+    }
+
+    @Test
+    void testEnrollmentNotFound_SetsContextFalse() {
+        context.put("event", TestUtils.mockEventWithResourceUUID("company-123"));
+
+        when(companyEnrollmentRepository.findByRelEntpPrtyId("company-123")).thenReturn(Optional.empty());
+
+        step.execute(context);
+        assertEquals(false, context.get("companyEnrolled"));
+    }
+
+    @Test
+    void testEnrollmentAlreadyComplete_SetsContextTrue() {
+        context.put("event", TestUtils.mockEventWithResourceUUID("company-123"));
+
+        EnrollmentStatusEntity status = new EnrollmentStatusEntity();
+        status.setEnrLstsCd("COMPLETE");
+
+        EnrollmentEntity entity = new EnrollmentEntity();
+        entity.setEnrLstsCd(status);
+
+        when(companyEnrollmentRepository.findByRelEntpPrtyId("company-123")).thenReturn(Optional.of(entity));
+
+        step.execute(context);
+        assertEquals(true, context.get("companyEnrolled"));
+    }
+
+    @Test
+    void testEnrollmentIncomplete_GustoReturnsComplete_UpdatesToComplete() {
+        context.put("event", TestUtils.mockEventWithResourceUUID("company-123"));
+
+        EnrollmentStatusEntity status = new EnrollmentStatusEntity();
+        status.setEnrLstsCd("INCOMPLETE");
+
+        EnrollmentEntity entity = new EnrollmentEntity();
+        entity.setRelEntpPrtyId("company-123");
+        entity.setSrcCoId("co-id");
+        entity.setEnrLstsCd(status);
+
+        when(companyEnrollmentRepository.findByRelEntpPrtyId("company-123")).thenReturn(Optional.of(entity));
+
+        CompanyOnboardingResponse response = new CompanyOnboardingResponse();
+        response.setOnboardingStatus("COMPLETE");
+
+        when(gustoCompanyService.getCompanyOnboardingStatus("company-123")).thenReturn(response);
+
+        step.execute(context);
+        assertEquals(true, context.get("companyEnrolled"));
+        verify(companyEnrollmentRepository).updateEnrLstsCdByRelEntpPrtyIdAndSrcCoId("company-123", "co-id", "COMPLETE");
+    }
+
+    @Test
+    void testEnrollmentIncomplete_GustoReturnsIncomplete_ThrowsException() {
+        context.put("event", TestUtils.mockEventWithResourceUUID("company-123"));
+
+        EnrollmentStatusEntity status = new EnrollmentStatusEntity();
+        status.setEnrLstsCd("IN_PROGRESS");
+
+        EnrollmentEntity entity = new EnrollmentEntity();
+        entity.setRelEntpPrtyId("company-123");
+        entity.setSrcCoId("co-id");
+        entity.setEnrLstsCd(status);
+
+        when(companyEnrollmentRepository.findByRelEntpPrtyId("company-123")).thenReturn(Optional.of(entity));
+
+        CompanyOnboardingResponse response = new CompanyOnboardingResponse();
+        response.setOnboardingStatus("NOT_STARTED");
+
+        when(gustoCompanyService.getCompanyOnboardingStatus("company-123")).thenReturn(response);
+
+        ProcessorException exception = assertThrows(ProcessorException.class, () -> step.execute(context));
+        assertEquals("Enrollment incomplete for companyId: company-123", exception.getMessage());
+        assertEquals(false, context.get("companyEnrolled"));
+    }
+}
+public class TestUtils {
+
+    public static Event mockEventWithResourceUUID(String uuid) {
+        Event event = mock(Event.class);
+        MessageBody messageBody = mock(MessageBody.class);
+
+        when(event.getMessageBody()).thenReturn(messageBody);
+        when(messageBody.getResourceUUID()).thenReturn(UUID.fromString(uuid));
+        return event;
+    }
+}
