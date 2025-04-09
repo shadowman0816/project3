@@ -200,3 +200,69 @@ class GustoEmployeeBankAccountRetrievalStepTest {
         assertDoesNotThrow(() -> step.execute(context));
     }
 }
+package net.jpmchase.payroll.processor.steps.payee.gusto;
+
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.model.event.Event;
+import net.jpmchase.payroll.processor.model.event.MessageBody;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class TestUtils {
+
+    public static Event mockEventWithAll(String employeeId, String companyId, String bankAccountUUID) {
+        Event event = new Event();
+        MessageBody messageBody = new MessageBody();
+
+        Map<String, String> references = new HashMap<>();
+        references.put("employee_uuid", employeeId);
+
+        messageBody.setReferences(references);
+        messageBody.setResourceUUID(bankAccountUUID);  // Bank account UUID
+        messageBody.setEntityUUID(companyId);         // Company UUID
+
+        event.setMessageBody(messageBody);
+        return event;
+    }
+
+    public static Event mockEventWithReferences(String key1, String value1, String key2, String value2) {
+        Event event = new Event();
+        MessageBody messageBody = new MessageBody();
+
+        Map<String, String> references = new HashMap<>();
+        references.put(key1, value1);
+        references.put(key2, value2);
+
+        messageBody.setReferences(references);
+        event.setMessageBody(messageBody);
+        return event;
+    }
+
+    public static Event mockEventWithReferencesOnly(String key, String value) {
+        Event event = new Event();
+        MessageBody messageBody = new MessageBody();
+
+        Map<String, String> references = new HashMap<>();
+        references.put(key, value);
+
+        messageBody.setReferences(references);
+        event.setMessageBody(messageBody);
+        return event;
+    }
+
+    public static Event mockEventWithReferencesAndResource(String refKey, String refVal, String resKey, String resVal) {
+        Event event = new Event();
+        MessageBody messageBody = new MessageBody();
+
+        Map<String, String> references = new HashMap<>();
+        references.put(refKey, refVal);
+
+        messageBody.setReferences(references);
+        messageBody.setResourceUUID(resVal);
+
+        event.setMessageBody(messageBody);
+        return event;
+    }
+}
+
