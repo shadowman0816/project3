@@ -389,4 +389,115 @@ class GustoEmployeeBankAccountRetrievalStepTest {
         assertTrue((Boolean) context.get("updateToCheck"));
     }
 }
+@ExtendWith(MockitoExtension.class)
+class GustoEmployeeBankAccountRetrievalStepTest {
+
+    @InjectMocks
+    private GustoEmployeeBankAccountRetrievalStep step;
+
+    @Mock
+    private GustoPaymentConfigurationService paymentConfigurationService;
+
+    @Mock
+    private EnrollEntmntRepository companyEnrollmentRepository;
+
+    private WorkflowContext context;
+
+    @BeforeEach
+    void setup() {
+        context = new WorkflowContext();
+    }
+
+    @Test
+    void testBankAccountNotInSplits_ContextUpdateToCheckTrue() {
+        UUID companyId = UUID.randomUUID();
+        UUID bankAccountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+
+        // Setup event in context
+        Event event = TestUtils.mockEventWithAll(employeeId.toString(), companyId, bankAccountId);
+        context.put("event", event);
+
+        // Mock enrollment
+        EnrollmentEntity enrollment = new EnrollmentEntity();
+        enrollment.setRelEntpPrtyId(companyId.toString());
+        enrollment.setSrcCoId(companyId.toString());
+        enrollment.setEnrlStsCd(new EnrollmentStatusEntity());
+        when(companyEnrollmentRepository.findByRelEntpPrtyId(companyId.toString()))
+                .thenReturn(Optional.of(enrollment));
+
+        // Create a split with a different UUID
+        Split split = new Split();
+        split.setBankAccountUUID(UUID.randomUUID().toString()); // different UUID
+
+        EmployeePaymentConfiguration config = new EmployeePaymentConfiguration();
+        config.setSplits(Set.of(split));
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee(companyId.toString(), employeeId.toString()))
+                .thenReturn(config);
+
+        // Execute step
+        step.execute(context);
+
+        assertTrue((Boolean) context.get("updateToCheck"));
+    }
+
+    @Test
+    void testBankAccountStillExistsInGusto_ThrowsException() {
+        UUID companyId = UUID.randomUUID();
+        UUID bankAccountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+
+        Event event = TestUtils.mockEventWithAll(employeeId.toString(), companyId, bankAccountId);
+        context.put("event", event);
+
+        EnrollmentEntity enrollment = new EnrollmentEntity();
+        enrollment.setRelEntpPrtyId(companyId.toString());
+        enrollment.setSrcCoId(companyId.toString());
+        enrollment.setEnrlStsCd(new EnrollmentStatusEntity());
+        when(companyEnrollmentRepository.findByRelEntpPrtyId(companyId.toString()))
+                .thenReturn(Optional.of(enrollment));
+
+        // Split with same UUID
+        Split split = new Split();
+        split.setBankAccountUUID(bankAccountId.toString());
+
+        EmployeePaymentConfiguration config = new EmployeePaymentConfiguration();
+        config.setSplits(Set.of(split));
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee(companyId.toString(), employeeId.toString()))
+                .thenReturn(config);
+
+        ProcessorException ex = assertThrows(ProcessorException.class, () -> step.execute(context));
+        assertTrue(ex.getMessage().contains("still exists in Gusto"));
+    }
+
+    @Test
+    void testEmptySplits_ContextUpdateToCheckTrue() {
+        UUID companyId = UUID.randomUUID();
+        UUID bankAccountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+
+        Event event = TestUtils.mockEventWithAll(employeeId.toString(), companyId, bankAccountId);
+        context.put("event", event);
+
+        EnrollmentEntity enrollment = new EnrollmentEntity();
+        enrollment.setRelEntpPrtyId(companyId.toString());
+        enrollment.setSrcCoId(companyId.toString());
+        enrollment.setEnrlStsCd(new EnrollmentStatusEntity());
+        when(companyEnrollmentRepository.findByRelEntpPrtyId(companyId.toString()))
+                .thenReturn(Optional.of(enrollment));
+
+        EmployeePaymentConfiguration config = new EmployeePaymentConfiguration();
+        config.setSplits(Collections.emptySet());
+
+        when(paymentConfigurationService.getPaymentConfigurationsForAnEmployee(companyId.toString(), employeeId.toString()))
+                .thenReturn(config);
+
+        step.execute(context);
+
+        assertTrue((Boolean) context.get("updateToCheck"));
+    }
+}
+
 
