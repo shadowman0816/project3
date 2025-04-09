@@ -1,120 +1,50 @@
-@Component("DeletePayeeBankAccountStep")
+@Component("storeEmployeeBankAccountInformation")
 @RequiredArgsConstructor
 @Slf4j
-public class DeletePayeeBankAccountStep implements Step {
+public class StorePayeeBankAccountInformationStep implements Step {
 
-    private final PyrlPayeeAcctRepository acctRepository;
-    private final PyrlPayeeAcctAuditRepository auditRepository;
+    private final PayeeRepository payeeRepository;
+    private final PayeeAccountRepository payeeAccountRepository;
+    private final PayeeAccountAuditRepository payeeAccountAuditRepository;
 
     @Override
     @Transactional
     public void execute(WorkflowContext context) {
-        Event event = context.get("event", Event.class);
-        String payeeId = event.getMessageBody().getReferences().get("payee_id");
-
-        if (payeeId == null) {
-            throw new IllegalArgumentException("Missing payee_id in event context");
-        }
-
-        Optional<PyrlPayeeAcctEntity> acctOpt = acctRepository.findBySrcPayeeId(payeeId);
-        if (acctOpt.isEmpty()) {
-            log.warn("No payee account found for payeeId: {}", payeeId);
+        Boolean updateToCheck = (Boolean) context.get("updateToCheck");
+        if (!Boolean.TRUE.equals(updateToCheck)) {
+            log.info("Skipping step. updateToCheck is not true.");
             return;
         }
 
-        PyrlPayeeAcctEntity acct = acctOpt.get();
+        Event event = context.get("event", Event.class);
+        String payeeId = Optional.ofNullable(event)
+            .map(Event::getMessageBody)
+            .map(MessageBody::getEntityUUID)
+            .map(UUID::toString)
+            .orElseThrow(() -> new BusinessException("Missing Payee UUID", "PYRL_0001"));
 
-        // Move to audit
-        PyrlPayeeAcctAuditEntity audit = new PyrlPayeeAcctAuditEntity();
-        audit.setPyrlPayeeAcctId(acct.getPyrlPayeeAcctId());
-        audit.setSrcPayeeId(acct.getSrcPayeeId());
-        audit.setAcctNumber(acct.getAcctNumber());
-        audit.setAcctStatusCode(acct.getAcctStatusCode());
-        audit.setCreatedTimestamp(LocalDateTime.now());
-        audit.setCreatedUserId("system");
+        log.info("Updating payee {} to payment method CHECK", payeeId);
 
-        auditRepository.save(audit);
+        // Step 1: Update payee table
+        PyrlPayeeEntity payee = payeeRepository.findBySrcPayeeId(payeeId)
+            .orElseThrow(() -> new ProcessorException("Payee not found for id: " + payeeId));
 
-        // Update active record to 'DELETED'
-        acct.setAcctStatusCode("DELETED");
-        acct.setUpdateTimestamp(LocalDateTime.now());
-        acct.setUpdateUserId("system");
-        acctRepository.save(acct);
+        payee.setPymtModeNm("CHECK");
+        payee.setPyrlDlvrTypeCd("CHECK");
+        payeeRepository.save(payee);
 
-        log.info("Bank account deleted for payeeId: {}", payeeId);
-    }
-}
-@ExtendWith(MockitoExtension.class)
-class DeletePayeeBankAccountStepTest {
+        // Step 2: Audit and update payee account
+        PyrlPayeeAcctEntity payeeAcct = payeeAccountRepository.findActiveBySrcPayeeId(payeeId)
+            .orElseThrow(() -> new ProcessorException("Active payee account not found for payeeId: " + payeeId));
 
-    @InjectMocks
-    private DeletePayeeBankAccountStep step;
+        // Copy to audit
+        PyrlPayeeAcctAudtEntity auditEntity = new PyrlPayeeAcctAudtEntity(payeeAcct); // Assuming constructor copy
+        payeeAccountAuditRepository.save(auditEntity);
 
-    @Mock
-    private PyrlPayeeAcctRepository acctRepository;
+        // Mark current account inactive
+        payeeAcct.setPayeeAcctStsCd("INACTIVE");
+        payeeAccountRepository.save(payeeAcct);
 
-    @Mock
-    private PyrlPayeeAcctAuditRepository auditRepository;
-
-    private WorkflowContext context;
-    private Event event;
-
-    @BeforeEach
-    void setup() {
-        context = new WorkflowContext();
-        event = new Event();
-        MessageBody body = new MessageBody();
-        Map<String, String> references = new HashMap<>();
-        references.put("payee_id", "PAYEE123");
-        body.setReferences(references);
-        event.setMessageBody(body);
-        context.put("event", event);
-    }
-
-    @Test
-    void testDeleteBankAccount_SuccessfulCase() {
-        PyrlPayeeAcctEntity acct = new PyrlPayeeAcctEntity();
-        acct.setPyrlPayeeAcctId("ACCT123");
-        acct.setSrcPayeeId("PAYEE123");
-        acct.setAcctNumber("1234567890");
-        acct.setAcctStatusCode("ACTIVE");
-
-        when(acctRepository.findBySrcPayeeId("PAYEE123")).thenReturn(Optional.of(acct));
-
-        step.execute(context);
-
-        verify(auditRepository).save(any(PyrlPayeeAcctAuditEntity.class));
-        verify(acctRepository).save(argThat(updated -> "DELETED".equals(updated.getAcctStatusCode())));
-    }
-
-    @Test
-    void testDeleteBankAccount_NoPayeeId_ThrowsException() {
-        event.getMessageBody().getReferences().remove("payee_id");
-
-        assertThrows(IllegalArgumentException.class, () -> step.execute(context));
-    }
-
-    @Test
-    void testDeleteBankAccount_NoPayeeAccount_Found() {
-        when(acctRepository.findBySrcPayeeId("PAYEE123")).thenReturn(Optional.empty());
-
-        step.execute(context);
-
-        verify(auditRepository, never()).save(any());
-        verify(acctRepository, never()).save(any());
-    }
-
-    @Test
-    void testDeleteBankAccount_NullReferences_ThrowsException() {
-        event.getMessageBody().setReferences(null);
-
-        assertThrows(NullPointerException.class, () -> step.execute(context));
-    }
-
-    @Test
-    void testDeleteBankAccount_NullMessageBody_ThrowsException() {
-        event.setMessageBody(null);
-
-        assertThrows(NullPointerException.class, () -> step.execute(context));
+        log.info("Completed update to CHECK for payee {}", payeeId);
     }
 }
