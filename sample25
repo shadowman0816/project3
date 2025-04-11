@@ -52,3 +52,114 @@ public class DeterminePayeeOnboardingStatusStep implements Step {
         }
     }
 }
+// EventUtil.java
+package net.jpmchase.payroll.processor.util;
+
+import net.jpmchase.payroll.processor.common.model.Event;
+
+import java.util.Map;
+
+public class EventUtil {
+
+    public static String extractPayeeId(Event event, String eventType) {
+        Map<String, Object> references = event.getReferences();
+        Map<String, Object> resources = event.getResources();
+
+        if (eventType.startsWith("employee.")) {
+            return extractId(references, resources, "employee_uuid");
+        } else if (eventType.startsWith("contractor.")) {
+            return extractId(references, resources, "contractor_uuid");
+        }
+
+        throw new IllegalArgumentException("Unsupported eventType for payee ID extraction: " + eventType);
+    }
+
+    private static String extractId(Map<String, Object> references, Map<String, Object> resources, String key) {
+        if (references != null && references.containsKey(key)) {
+            return (String) references.get(key);
+        }
+        if (resources != null && resources.containsKey(key)) {
+            return (String) resources.get(key);
+        }
+        throw new IllegalArgumentException("Missing required identifier: " + key);
+    }
+}
+
+// PayeeOnboardingService.java
+package net.jpmchase.payroll.processor.steps.onboarding;
+
+public interface PayeeOnboardingService {
+    boolean isOnboardingComplete(String payeeId);
+}
+
+// EmployeeOnboardingService.java
+package net.jpmchase.payroll.processor.steps.onboarding;
+
+import net.jpmchase.payroll.gusto.client.GustoEmployeeService;
+import org.springframework.stereotype.Service;
+
+@Service
+public class EmployeeOnboardingService implements PayeeOnboardingService {
+
+    private final GustoEmployeeService gustoEmployeeService;
+
+    public EmployeeOnboardingService(GustoEmployeeService gustoEmployeeService) {
+        this.gustoEmployeeService = gustoEmployeeService;
+    }
+
+    @Override
+    public boolean isOnboardingComplete(String payeeId) {
+        return gustoEmployeeService.getOnboardingStatus(payeeId).isOnboardingComplete();
+    }
+}
+
+// ContractorOnboardingService.java
+package net.jpmchase.payroll.processor.steps.onboarding;
+
+import net.jpmchase.payroll.gusto.client.GustoContractorService;
+import org.springframework.stereotype.Service;
+
+@Service
+public class ContractorOnboardingService implements PayeeOnboardingService {
+
+    private final GustoContractorService gustoContractorService;
+
+    public ContractorOnboardingService(GustoContractorService gustoContractorService) {
+        this.gustoContractorService = gustoContractorService;
+    }
+
+    @Override
+    public boolean isOnboardingComplete(String payeeId) {
+        return gustoContractorService.getOnboardingStatus(payeeId).isOnboardingComplete();
+    }
+}
+
+// PayeeOnboardingServiceFactory.java
+package net.jpmchase.payroll.processor.steps.onboarding;
+
+import org.springframework.stereotype.Component;
+
+import java.util.Map;
+
+@Component
+public class PayeeOnboardingServiceFactory {
+
+    private final Map<String, PayeeOnboardingService> serviceMap;
+
+    public PayeeOnboardingServiceFactory(EmployeeOnboardingService empService,
+                                         ContractorOnboardingService contractorService) {
+        this.serviceMap = Map.of(
+                "employee", empService,
+                "contractor", contractorService
+        );
+    }
+
+    public PayeeOnboardingService getService(String payeeType) {
+        if (!serviceMap.containsKey(payeeType)) {
+            throw new IllegalArgumentException("Unsupported payee type: " + payeeType);
+        }
+        return serviceMap.get(payeeType);
+    }
+}
+
+
