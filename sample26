@@ -1,0 +1,47 @@
+package net.jpmchase.payroll.processor.registry;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.config.WorkflowConfig;
+import net.jpmchase.payroll.processor.config.StepConfig;
+import org.springframework.stereotype.Component;
+
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class WorkflowRegistry {
+
+    private final WorkflowConfig workflowConfig;
+
+    public List<StepConfig> getStepsForEvent(String entityType, String eventType) {
+        Map<String, List<StepConfig>> eventMap =
+                workflowConfig.getGroups().getOrDefault(entityType, Collections.emptyMap());
+        return eventMap.getOrDefault(eventType, Collections.emptyList());
+    }
+
+    public StepConfig getStepConfig(String entityType, String eventType, String stepName) {
+        return getStepsForEvent(entityType, eventType)
+                .stream()
+                .filter(step -> step.getName().equalsIgnoreCase(stepName))
+                .findFirst()
+                .orElse(null);
+    }
+
+    public int getRetryCountForStep(String entityType, String eventType, String stepName) {
+        StepConfig step = getStepConfig(entityType, eventType, stepName);
+        return step != null ? step.getImmediateRetryCount() : 0;
+    }
+
+    public int getBackOffRetryForStep(String entityType, String eventType, String stepName, int retryCount) {
+        StepConfig step = getStepConfig(entityType, eventType, stepName);
+        if (step == null || step.getBackOffRetry() == null || !step.getBackOffRetry().isEnabled()) {
+            return 0;
+        }
+        return step.getBackOffRetry().getMaxBackOffHours();
+    }
+}
