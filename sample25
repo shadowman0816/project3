@@ -1,0 +1,54 @@
+package net.jpmchase.payroll.processor.steps.onboarding;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.common.context.WorkflowContext;
+import net.jpmchase.payroll.processor.exception.ProcessorException;
+import net.jpmchase.payroll.processor.model.entity.PyrlPayeeEntity;
+import net.jpmchase.payroll.processor.repository.PyrlPayeeRepository;
+import net.jpmchase.payroll.processor.service.onboarding.PayeeOnboardingService;
+import net.jpmchase.payroll.processor.service.onboarding.impl.ContractorOnboardingService;
+import net.jpmchase.payroll.processor.service.onboarding.impl.EmployeeOnboardingService;
+import net.jpmchase.payroll.processor.steps.Step;
+import net.jpmchase.payroll.processor.util.EventUtil;
+import org.springframework.stereotype.Component;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class DeterminePayeeOnboardingStatusStep implements Step {
+
+    private final PyrlPayeeRepository payeeRepository;
+    private final EmployeeOnboardingService employeeOnboardingService;
+    private final ContractorOnboardingService contractorOnboardingService;
+
+    @Override
+    public void execute(WorkflowContext context) {
+        String eventType = context.getEvent().getEventType();
+        String payeeId = EventUtil.extractPayeeId(context.getEvent());
+
+        if (payeeId == null) {
+            throw new ProcessorException("Missing payeeId for onboarding status determination.");
+        }
+
+        PyrlPayeeEntity payee = payeeRepository.findById(payeeId)
+                .orElseThrow(() -> new ProcessorException("Payee not found for ID: " + payeeId));
+
+        String payeeType = payee.getPayeeType();
+        boolean onboardingComplete;
+
+        PayeeOnboardingService onboardingService =
+                "employee".equalsIgnoreCase(payeeType) ? employeeOnboardingService : contractorOnboardingService;
+
+        onboardingComplete = onboardingService.isOnboardingComplete(payeeId);
+
+        if (onboardingComplete) {
+            payee.setSrcPayeeSts("COMPLETE");
+            payeeRepository.save(payee);
+            context.put("onboardingComplete", true);
+        } else {
+            context.put("onboardingComplete", false);
+            throw new ProcessorException("Payee onboarding not completed.");
+        }
+    }
+}
