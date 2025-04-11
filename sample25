@@ -188,4 +188,45 @@ public enum ErrorCode {
         return code + ": " + messageTemplate;
     }
 }
+package net.jpmchase.payroll.processor.steps.utils;
 
+import lombok.extern.slf4j.Slf4j;
+import net.jpmchase.payroll.processor.exception.BusinessException;
+import net.jpmchase.payroll.processor.model.Event;
+
+import java.util.Map;
+import java.util.Optional;
+
+@Slf4j
+public class EventUtil {
+
+    public static String extractPayeeId(final Event event) {
+        if (event == null || event.getMessageBody() == null) {
+            throw new BusinessException(ErrorCode.INVALID_EVENT.formatMessage("Event or MessageBody is null"));
+        }
+
+        String eventType = event.getMessageBody().getEventType();
+        Map<String, String> references = Optional.ofNullable(event.getMessageBody().getReferences()).orElse(Map.of());
+
+        if (eventType == null) {
+            throw new BusinessException(ErrorCode.INVALID_EVENT_TYPE.formatMessage("Event type is missing"));
+        }
+
+        log.debug("Extracting payee ID for eventType: {}", eventType);
+
+        if (eventType.contains(".bank_account.")) {
+            return references.values().stream()
+                    .findFirst()
+                    .orElseThrow(() -> new BusinessException(
+                        ErrorCode.MISSING_PAYEE_ID.getCode(),
+                        ErrorCode.MISSING_PAYEE_ID.formatMessage("Missing payeeId in references")));
+        } else {
+            if (event.getMessageBody().getEntityUUID() == null) {
+                throw new BusinessException(
+                    ErrorCode.MISSING_PAYEE_ID.getCode(),
+                    ErrorCode.MISSING_PAYEE_ID.formatMessage("Missing entity UUID for payee"));
+            }
+            return event.getMessageBody().getEntityUUID().toString();
+        }
+    }
+}
