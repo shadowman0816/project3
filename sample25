@@ -161,5 +161,31 @@ public class PayeeOnboardingServiceFactory {
         return serviceMap.get(payeeType);
     }
 }
+public enum ErrorCode {
+    MISSING_COMPANY_ID("PYRL_0001", "Missing required context value: companyId"),
+    MISSING_PAYEE_ID("PYRL_0002", "Missing required context value: payeeId"),
+    PAYEE_NOT_FOUND("PYRL_0003", "No payee found with ID: {0}"),
+    ENROLLMENT_INCOMPLETE("PYRL_0004", "Enrollment incomplete for companyId: {0}");
 
+    private final String code;
+    private final String messageTemplate;
+
+    ErrorCode(String code, String messageTemplate) {
+        this.code = code;
+        this.messageTemplate = messageTemplate;
+    }
+
+    public String getCode() {
+        return code;
+    }
+
+    public String formatMessage(Object... args) {
+        return java.text.MessageFormat.format(messageTemplate, args);
+    }
+
+    @Override
+    public String toString() {
+        return code + ": " + messageTemplate;
+    }
+}
 
