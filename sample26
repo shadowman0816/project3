@@ -45,3 +45,20 @@ public class WorkflowRegistry {
         return step.getBackOffRetry().getMaxBackOffHours();
     }
 }
+@Test
+void testIsWithinBackoffPeriod_AfterCutoff() {
+    Duration allowedDuration = Duration.ofHours(1);
+    LocalTime cutoffTime = LocalTime.of(12, 0); // Cutoff at 12:00 PM
+    LocalTime now = LocalTime.of(14, 0); // Simulate current time as 2:00 PM
+
+    // Set the system time explicitly if needed (if your logic depends on LocalTime.now())
+    // OR inject 'now' into the method for testability
+
+    // Assuming your method signature is like:
+    // isWithinBackoffPeriod(Duration duration, LocalTime cutoffTime)
+    // and internally it uses LocalTime.now()
+
+    boolean result = workflowContext.isWithinBackoffPeriod(allowedDuration, cutoffTime, now); // You may need to overload for testing
+    assertFalse(result);
+}
+
