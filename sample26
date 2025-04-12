@@ -61,4 +61,7 @@ void testIsWithinBackoffPeriod_AfterCutoff() {
     boolean result = workflowContext.isWithinBackoffPeriod(allowedDuration, cutoffTime, now); // You may need to overload for testing
     assertFalse(result);
 }
-
+public boolean isWithinBackoffPeriod(Duration allowedDuration, LocalTime cutoffTime, LocalTime now) {
+    LocalTime windowStart = now.minus(allowedDuration);
+    return now.isBefore(cutoffTime) && !now.isBefore(windowStart);
+}
